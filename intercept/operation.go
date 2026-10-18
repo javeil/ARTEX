@@ -291,6 +291,9 @@ func operationRestriction(p db.TargetPolicy, o Operation) (string, string) {
 	case "business_write", "account_change", "service_change":
 		return "deny", "禁止改变目标真实业务数据、账号或服务状态"
 	case "unknown_write":
+		if len(p.Accounts) > 0 || p.Budget.AccountAttempts > 0 {
+			return "deny", "账号范围/预算已启用，需由用户声明该接口用途后再执行未知写操作"
+		}
 		if p.Mode == "read_only" {
 			return "deny", "本任务只读，无法确认该调用不会改动业务状态"
 		}

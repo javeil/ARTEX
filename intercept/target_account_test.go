@@ -11,7 +11,7 @@ func TestAccountBudgetRequiresActualUnambiguousIdentity(t *testing.T) {
 	for _, tc := range []struct {
 		body string
 		ok   bool
-	}{{"username=alice&password=secret", true}, {"username=bob&password=secret", false}, {"username=alice&username=bob", false}, {"password=secret", false}, {`{"username":"alice","password":"secret"}`, true}} {
+	}{{"username=alice&password=secret", true}, {"username=bob&password=secret", false}, {"username=alice&username=bob", false}, {"password=secret", false}, {`{"username":"alice","password":"secret"}`, true}, {`{"username":"bob","username":"alice"}`, false}} {
 		_, e := operationAccount(p, Operation{Target: target, Method: "POST", Effect: "authenticate", Body: tc.body})
 		if (e == nil) != tc.ok {
 			t.Errorf("%s: %v", tc.body, e)

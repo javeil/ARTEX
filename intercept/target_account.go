@@ -1,7 +1,6 @@
 package intercept
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -34,8 +33,11 @@ func operationAccount(p db.TargetPolicy, o Operation) (string, error) {
 			values[k] = append(values[k], v...)
 		}
 	}
-	var obj map[string]any
-	if json.Unmarshal([]byte(o.Body), &obj) == nil {
+	obj, jsonErr := uniqueJSONObject(o.Body)
+	if strings.HasPrefix(strings.TrimSpace(o.Body), "{") && jsonErr != nil && (p.Budget.AccountAttempts > 0 || len(p.Accounts) > 0) {
+		return "", fmt.Errorf("无法唯一解析登录账号：%w", jsonErr)
+	}
+	if jsonErr == nil {
 		for _, key := range fields {
 			var value any = obj
 			for _, part := range strings.Split(key, ".") {

@@ -188,7 +188,7 @@ func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response,
 		release()
 		return i.rejectTargetRequest(req, err)
 	}
-	if op.Effect == "authenticate" && p.Budget.AccountAttempts == 0 {
+	if (op.Effect == "authenticate" || op.Effect == "unknown_write") && p.Budget.AccountAttempts == 0 {
 		shared, e := i.db.TargetHasAccountBudget(req.Context(), op.Target.ServiceKey())
 		if e != nil {
 			release()
@@ -197,6 +197,10 @@ func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response,
 		if shared {
 			p.Budget.AccountAttempts = 1
 		}
+	}
+	if op.Effect == "unknown_write" && (p.Budget.AccountAttempts > 0 || len(p.Accounts) > 0) {
+		release()
+		return i.rejectTargetRequest(req, fmt.Errorf("无法确认账号敏感请求用途，需用户声明接口后再执行"))
 	}
 	account, err := operationAccount(p, op)
 	if err != nil {
