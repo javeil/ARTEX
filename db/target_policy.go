@@ -265,8 +265,20 @@ func (d *DB) SaveTargetPolicy(ctx context.Context, id string, p TargetPolicy) er
 	if err != nil {
 		return err
 	}
-	_, err = d.ExecContext(ctx, `INSERT INTO task_target_policies(task_id,policy) SELECT id,$2::jsonb FROM tasks WHERE id::text=$1 ON CONFLICT(task_id) DO UPDATE SET policy=excluded.policy,revision=task_target_policies.revision+1,updated_at=now()`, id, raw)
-	return err
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO task_target_policies(task_id,policy) SELECT id,$2::jsonb FROM tasks WHERE id::text=$1 ON CONFLICT(task_id) DO UPDATE SET policy=excluded.policy,revision=task_target_policies.revision+1,updated_at=now()`, id, raw)
+	if err != nil {
+		return err
+	}
+	budget, _ := json.Marshal(p.Budget)
+	if _, err = tx.ExecContext(ctx, `UPDATE target_budget_claims SET budget=$2::jsonb WHERE task_id=$1`, id, budget); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 func (d *DB) CheckTaskTarget(ctx context.Context, id string, t Target) error {
 	if err := ctx.Err(); err != nil {

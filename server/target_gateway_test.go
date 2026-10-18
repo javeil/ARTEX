@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -139,5 +140,61 @@ func TestTargetGatewayInspectsHTTPSPathsBeforeContact(t *testing.T) {
 	}
 	if hits.Load() != 1 {
 		t.Fatalf("excluded HTTPS request contacted target: %d", hits.Load())
+	}
+}
+
+func TestTargetHealthFailureStopsFurtherMockRequests(t *testing.T) {
+	dsn := os.Getenv("ARTEX_PG_DSN")
+	if dsn == "" {
+		t.Skip("isolated PG required")
+	}
+	pg, e := db.Open(dsn)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pg.Close()
+	task, e := pg.CreateTask("health circuit breaker", "mock only", nil, 0, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pg.DeleteTask(task.ID)
+	_, e = pg.Assets().AddAgentScope(task.ID, "ip", "127.0.0.1", "manual", "manual")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = pg.SaveTargetPolicy(t.Context(), strconv.FormatInt(task.ID, 10), db.TargetPolicy{Budget: db.TargetBudget{ConsecutiveFailures: 2, CooldownSeconds: 10}}); e != nil {
+		t.Fatal(e)
+	}
+	var hits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1); w.WriteHeader(503) }))
+	defer target.Close()
+	ic := intercept.New(pg)
+	ctx := ic.WithScope(intercept.WithTaskContext(t.Context(), strconv.FormatInt(task.ID, 10), "test", nil))
+	g, e := intercept.NewTargetGateway(ctx, "", "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer g.Close()
+	proxy, _ := url.Parse(g.URL)
+	tr := &http.Transport{Proxy: http.ProxyURL(proxy)}
+	defer tr.CloseIdleConnections()
+	client := &http.Client{Transport: tr, Timeout: 5 * time.Second}
+	for j := 0; j < 3; j++ {
+		resp, e := client.Get(target.URL)
+		if e != nil {
+			t.Fatal(e)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		want := 503
+		if j == 2 {
+			want = 403
+		}
+		if resp.StatusCode != want {
+			t.Fatalf("request %d: %d", j, resp.StatusCode)
+		}
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("health stop contacted mock again: %d", hits.Load())
 	}
 }

@@ -41,3 +41,7 @@ SDK 的 ExecuteExtraTool 转发器会先解包再检查实际工具，避免直�
 人工审批绑定本次参数、脚本快照摘要及授权快照版本，并有 5 分钟有效期。快照包含人工 scope、关联公司范围、排除/允许规则、操作策略、人工约束和任务状态；批准后重新读取并核验，变化或任务到期/暂停即拒绝执行。批准记录保存授权版本与调用摘要。审批并不授予下一次调用，也不授予域外访问权限。
 
 每个授权 run 建立独立 HTTP(S) 目标网关，强制检查实际重定向、HTTPS 解密后的路径/方法和业务副作用，既不依赖抓包开关也不在拒绝后透传。Bash 的 curl/wget 固定网关并禁用外部客户端配置；禁止覆盖 proxy、目标映射和 --next。Python/Node 等遵守代理的客户端继承任务网关。浏览器 MCP 使用临时任务配置，将后续页面/脚本请求送入同一检查点。原生 WebFetch/自定义 HTTP 通过同一请求检查方法执行；对不提供实际连接可观测性的原始套接字/远端 Shell 不宣称 HTTP 网关能覆盖，它们仍需要明确目标参数与人工审查。
+
+budget 可设置 requests_per_second、max_concurrent、max_requests、account_attempts/account_window_seconds、consecutive_failures、max_latency_ms、cooldown_seconds。0 表示该项未配置上限；部署者按许可与目标承载能力设置，不假设一个通用安全速率。真实 HTTP 请求在发送前通过 PostgreSQL 事务/服务锁预留额度：同一服务跨任务、worker 和实例共享 RPS、并发与账号窗口，累计请求按任务约束。账号范围/预算开启时，无法从真实请求中唯一确认账号则拒绝，不能凭 agent 自报绕过。
+
+实际请求及完成状态保存在 target_requests，可用 GET `/api/tasks/{id}/target-requests` 游标分页。429 尊重 Retry-After，账号锁定和连续失败/首响应延迟超限对同一服务设置共享冷却；普通 403/WAF 不触发“靶机损坏”熔断。未结束记录保留为 running，重启不会把缺少完成证据的请求静默当作已结束。

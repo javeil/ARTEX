@@ -984,6 +984,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/intercept/history/{id}/execution", s.interceptExecution)
 	mux.HandleFunc("GET /api/intercept/task/{taskID}", s.interceptListTaskItems)
 	mux.HandleFunc("GET /api/intercept/task/{taskID}/calls", s.interceptListTaskCalls)
+	mux.HandleFunc("GET /api/tasks/{id}/target-requests", s.targetRequests)
 	mux.HandleFunc("GET /api/tasks/{id}/target-policy", s.targetPolicy)
 	mux.HandleFunc("PUT /api/tasks/{id}/target-policy", s.targetPolicy)
 	mux.HandleFunc("PUT /api/conversations/{id}/authorization", s.bindConversationAuthorization)

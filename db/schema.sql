@@ -1572,3 +1572,23 @@ CREATE TABLE IF NOT EXISTS task_target_policies (
 );
 
 ALTER TABLE conversations ADD COLUMN IF NOT EXISTS task_id BIGINT REFERENCES tasks(id) ON DELETE SET NULL;
+
+CREATE TABLE IF NOT EXISTS target_requests (
+ id BIGSERIAL PRIMARY KEY, task_id TEXT NOT NULL, target_key TEXT NOT NULL,
+ url TEXT NOT NULL, method TEXT NOT NULL, account_hash TEXT NOT NULL DEFAULT '',
+ budget JSONB NOT NULL, state TEXT NOT NULL DEFAULT 'running',
+ status_code INTEGER NOT NULL DEFAULT 0, latency_ms INTEGER NOT NULL DEFAULT 0,
+ error TEXT NOT NULL DEFAULT '', started_at TIMESTAMPTZ NOT NULL DEFAULT now(), finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_target_requests_service_time ON target_requests(target_key,started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_target_requests_active ON target_requests(target_key) WHERE state='running';
+CREATE INDEX IF NOT EXISTS idx_target_requests_task ON target_requests(task_id,id DESC);
+CREATE INDEX IF NOT EXISTS idx_target_requests_account ON target_requests(target_key,account_hash,started_at DESC) WHERE account_hash<>'';
+CREATE TABLE IF NOT EXISTS target_budget_claims (
+ task_id TEXT NOT NULL, target_key TEXT NOT NULL, budget JSONB NOT NULL,
+ PRIMARY KEY(task_id,target_key)
+);
+CREATE TABLE IF NOT EXISTS target_safety_state (
+ target_key TEXT PRIMARY KEY, blocked_until TIMESTAMPTZ,
+ consecutive_failures INTEGER NOT NULL DEFAULT 0, reason TEXT NOT NULL DEFAULT ''
+);

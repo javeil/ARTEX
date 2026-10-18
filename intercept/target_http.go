@@ -8,6 +8,8 @@ import (
 	"github.com/Autumn-27/artex/db"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -161,8 +163,110 @@ func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response,
 	if i == nil {
 		return nil, fmt.Errorf("目标访问校验器不可用，必须绑定授权任务")
 	}
-	if _, err := i.AuthorizeRequest(req.Context(), req); err != nil {
+	op, err := i.AuthorizeRequest(req.Context(), req)
+	if err != nil {
 		return nil, err
 	}
-	return base.RoundTrip(req)
+	p, err := i.db.LoadTargetPolicy(req.Context(), TaskIDFromContext(req.Context()))
+	if err != nil {
+		return nil, err
+	}
+	account, err := operationAccount(p, op)
+	if err != nil {
+		return nil, err
+	}
+	op.Account = account
+	id, err := i.db.BeginTargetRequest(req.Context(), TaskIDFromContext(req.Context()), op.Target, op.Method, account, p.Budget)
+	if err != nil {
+		return nil, err
+	}
+	started := time.Now()
+	resp, err := base.RoundTrip(req)
+	latency := int(time.Since(started).Milliseconds())
+	if err != nil {
+		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(req.Context()), 2*time.Second)
+		defer cancel()
+		if saveErr := i.db.FinishTargetRequest(finishCtx, id, 0, latency, err.Error(), 0); saveErr != nil {
+			return nil, fmt.Errorf("目标请求失败且审计结果写入失败: %w", saveErr)
+		}
+		return nil, err
+	}
+	retry := 0
+	if raw := resp.Header.Get("Retry-After"); raw != "" {
+		if n, e := strconv.Atoi(raw); e == nil {
+			retry = n
+		} else if at, e := http.ParseTime(raw); e == nil {
+			retry = int(time.Until(at).Seconds())
+		}
+	}
+	body := &targetResponseBody{ReadCloser: resp.Body, interceptor: i, ctx: req.Context(), id: id, status: resp.StatusCode, latency: latency, retry: retry}
+	resp.Body = body
+	if resp.Header.Get("X-Account-Locked") == "true" {
+		body.locked = true
+	}
+	return resp, nil
+}
+
+type targetResponseBody struct {
+	io.ReadCloser
+	interceptor            *Interceptor
+	ctx                    context.Context
+	id                     int64
+	status, latency, retry int
+	locked                 bool
+	mu                     sync.Mutex
+	prefix                 []byte
+	once                   sync.Once
+	finishErr              error
+}
+
+func (b *targetResponseBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.mu.Lock()
+	if len(b.prefix) < 8192 {
+		left := 8192 - len(b.prefix)
+		if n < left {
+			left = n
+		}
+		b.prefix = append(b.prefix, p[:left]...)
+	}
+	b.mu.Unlock()
+	if err != nil {
+		message := ""
+		if err != io.EOF {
+			message = err.Error()
+		}
+		b.finish(message)
+	}
+	return n, err
+}
+func (b *targetResponseBody) finish(message string) {
+	b.once.Do(func() {
+		b.mu.Lock()
+		prefix := strings.ToLower(string(b.prefix))
+		locked := b.locked
+		b.mu.Unlock()
+		for _, marker := range []string{"account locked", "account is locked", "账号已锁定", "账户已锁定", "too many login attempts"} {
+			locked = locked || strings.Contains(prefix, marker)
+		}
+		signals := []string{}
+		if locked {
+			signals = append(signals, "account_locked")
+		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(b.ctx), 2*time.Second)
+		defer cancel()
+		b.finishErr = b.interceptor.db.FinishTargetRequest(ctx, b.id, b.status, b.latency, message, b.retry, signals...)
+	})
+}
+func (b *targetResponseBody) Close() error {
+	err := b.ReadCloser.Close()
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	b.finish(message)
+	if b.finishErr != nil {
+		return b.finishErr
+	}
+	return err
 }
