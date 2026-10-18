@@ -1563,3 +1563,12 @@ CREATE TABLE IF NOT EXISTS tool_call_audit (
  reason TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_tool_call_audit_task_id ON tool_call_audit(task_id,id DESC);
+
+-- Operator-confirmed target authorization, shared by every active test entry.
+CREATE TABLE IF NOT EXISTS task_target_policies (
+ task_id BIGINT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+ policy JSONB NOT NULL DEFAULT '{}', revision BIGINT NOT NULL DEFAULT 1,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS task_id BIGINT REFERENCES tasks(id) ON DELETE SET NULL;

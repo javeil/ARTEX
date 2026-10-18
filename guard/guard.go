@@ -104,7 +104,7 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) (result hook.Resu
 		setAudit(ctx, "core", "deny", reason)
 		return g.block(ev.ToolName, systemBlockMessage("核心防护："+reason), cmd)
 	}
-	if hosts, unknown := intercept.ScopeTargets(ev.ToolName, ev.Input); g.interceptor == nil && intercept.TaskIDFromContext(ctx) != "" && (len(hosts) > 0 || unknown) {
+	if hosts, unknown := intercept.ScopeTargets(ev.ToolName, ev.Input); g.interceptor == nil && (len(hosts) > 0 || unknown) {
 		setAudit(ctx, "scope", "deny", "范围校验器不可用")
 		return g.block(ev.ToolName, systemBlockMessage("目标不在本任务授权范围：范围校验器不可用"), cmd)
 	}

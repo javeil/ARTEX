@@ -52,6 +52,7 @@ GROUP BY c.id`)
 type Conversation struct {
 	ID           int64      `json:"id"`
 	AgentKey     string     `json:"agent_key"`
+	TaskID       *int64     `json:"task_id,omitempty"`
 	Title        string     `json:"title"`
 	LLMProfileID *int64     `json:"llm_profile_id,omitempty"`
 	Pinned       bool       `json:"pinned"`
@@ -66,12 +67,12 @@ type ConversationPatch struct {
 	Pinned *bool
 }
 
-const convCols = `id, agent_key, title, llm_profile_id, pinned_at, created_at, updated_at`
+const convCols = `id, agent_key, title, llm_profile_id, pinned_at, created_at, updated_at, task_id`
 
 func scanConv(row interface{ Scan(...any) error }) (Conversation, error) {
 	var c Conversation
 	var pinnedAt sql.NullTime
-	err := row.Scan(&c.ID, &c.AgentKey, &c.Title, &c.LLMProfileID, &pinnedAt, &c.CreatedAt, &c.UpdatedAt)
+	err := row.Scan(&c.ID, &c.AgentKey, &c.Title, &c.LLMProfileID, &pinnedAt, &c.CreatedAt, &c.UpdatedAt, &c.TaskID)
 	if pinnedAt.Valid {
 		c.Pinned = true
 		c.PinnedAt = &pinnedAt.Time
@@ -324,4 +325,10 @@ func (d *DB) ConvActivityDetail(convID, id int64) (string, error) {
 		return "", nil
 	}
 	return s.String, err
+}
+
+// BindConversationTask is an operator-only authorization change, never an agent tool.
+func (d *DB) BindConversationTask(id int64, taskID *int64) error {
+	_, err := d.Exec(`UPDATE conversations SET task_id=$2 WHERE id=$1`, id, taskID)
+	return err
 }

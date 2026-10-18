@@ -26,7 +26,7 @@ func TaskIDFromContext(ctx context.Context) string { id, _ := taskInfoFromCtx(ct
 // redirects). A task with missing policy wiring fails closed.
 func CheckURL(ctx context.Context, raw string) error {
 	if TaskIDFromContext(ctx) == "" {
-		return nil
+		return fmt.Errorf("目标不在本任务授权范围：主动测试必须绑定授权任务")
 	}
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
@@ -36,20 +36,20 @@ func CheckURL(ctx context.Context, raw string) error {
 	if i == nil {
 		return fmt.Errorf("目标不在本任务授权范围：范围校验器不可用")
 	}
-	return i.CheckTarget(ctx, u.Hostname())
+	return i.CheckTarget(ctx, raw)
 }
 
-func (i *Interceptor) CheckTarget(ctx context.Context, host string) error {
+func (i *Interceptor) CheckTarget(ctx context.Context, raw string) error {
 	id := TaskIDFromContext(ctx)
 	if id == "" {
-		return nil
+		return fmt.Errorf("目标不在本任务授权范围：主动测试必须绑定授权任务")
 	}
-	rules, err := i.db.TaskNetworkScope(ctx, id)
+	t, err := db.ParseTarget(raw)
 	if err != nil {
-		return fmt.Errorf("目标不在本任务授权范围：无法读取授权范围：%w", err)
+		return err
 	}
-	if !db.NetworkScopeAllows(rules, host) {
-		return fmt.Errorf("目标不在本任务授权范围：%s", host)
+	if err = i.db.CheckTaskTarget(ctx, id, t); err != nil {
+		return fmt.Errorf("目标不在本任务授权范围：%w", err)
 	}
 	return nil
 }
@@ -59,13 +59,17 @@ func (i *Interceptor) ScopeDecision(ctx context.Context, tool string, input []by
 		return Decision{Action: "ask", Message: "修改授权范围需要人工审批", TimeoutEnabled: true, TimeoutSeconds: 300, TimeoutAction: "deny"}, true
 	}
 	if TaskIDFromContext(ctx) == "" {
+		hosts, unknown := ScopeTargets(tool, input)
+		if len(hosts) > 0 || unknown {
+			return Decision{Action: "deny", Message: "主动测试必须绑定授权任务，当前会话没有授权上下文"}, true
+		}
 		return Decision{}, false
 	}
 	hosts, unknown := ScopeTargets(tool, input)
 	if shellFollowsRedirects(tool, input) {
 		return Decision{Action: "deny", Message: "Bash 自动重定向无法逐跳确认授权范围，请改用 WebFetch 或关闭重定向"}, true
 	}
-	for _, h := range hosts {
+	for _, h := range ScopeTargetDetails(tool, input, hosts) {
 		if err := i.CheckTarget(ctx, h); err != nil {
 			return Decision{Action: "deny", Message: err.Error()}, true
 		}
@@ -296,4 +300,41 @@ func UnwrapToolCall(tool string, input []byte) (string, []byte, error) {
 		}
 	}
 	return tool, input, nil
+}
+
+// ScopeTargetDetails preserves URLs rather than erasing service/path identity.
+// Non-URL scan targets remain host-only and fail closed under service restrictions.
+func ScopeTargetDetails(tool string, input []byte, hosts []string) []string {
+	var obj map[string]json.RawMessage
+	_ = json.Unmarshal(input, &obj)
+	values := []string{}
+	covered := map[string]bool{}
+	if strings.EqualFold(tool, "WebFetch") {
+		var v string
+		_ = json.Unmarshal(obj["url"], &v)
+		values = append(values, v)
+		if u, e := url.Parse(v); e == nil {
+			covered[db.NormalizeScopeHost(u.Hostname())] = true
+		}
+	}
+	if tool == "Bash" || tool == "Monitor" || tool == "shell_open" || tool == "shell_send" {
+		field := "command"
+		if tool == "shell_send" {
+			field = "text"
+		}
+		var cmd string
+		_ = json.Unmarshal(obj[field], &cmd)
+		for _, raw := range scopeURL.FindAllString(cmd, -1) {
+			if u, e := url.Parse(raw); e == nil && u.Hostname() != "" {
+				values = append(values, raw)
+				covered[db.NormalizeScopeHost(u.Hostname())] = true
+			}
+		}
+	}
+	for _, h := range hosts {
+		if !covered[h] {
+			values = append(values, h)
+		}
+	}
+	return values
 }

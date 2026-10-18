@@ -772,6 +772,7 @@ export interface FindingRetest {
 
 export interface Conversation {
   id: number;
+  task_id?: number | null;
   running?: boolean; // live server state, returned with the conversation list
   agent_key: string;
   title: string;

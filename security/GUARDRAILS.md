@@ -29,3 +29,9 @@ Guard 使用 Shell AST 对递归强制删除、系统目录删除、mkfs、dd �
 采用单次小型同步 INSERT（ask 才需 UPDATE），不使用可能在重启/满队列时静默丢失的异步队列或抽样。内存环只缓存运行时视图。按 task_id/id 索引及 keyset 游标查询，`GET /api/intercept/task/{taskID}/calls?limit=100&before_id=...`，每页最多 500 条，记录在任务删除后保留。保留周期应由部署方按审计要求制定；不在请求路径上全表清理。
 
 SDK 的 ExecuteExtraTool 转发器会先解包再检查实际工具，避免直接 CoreTool.Call 跳过钩子。Monitor 视为 Shell；自定义 command/script 在模板渲染后重新过 Guard，自定义 HTTP 在渲染后过 Guard 且每跳 transport 复验。
+
+## 目标行为控制补强（第二轮）
+
+目标访问将 task_scope/company_scope、全局资产排除、任务 block/allow 规则合并判定。显式排除优先，规则读取失败拒绝访问；URL、协议和端口保留到检查阶段。GET/PUT `/api/tasks/{id}/target-policy` 管理用户确认的策略：targets 可按 host、schemes、ports、path_prefixes、excluded_path_prefixes 收窄既有人工范围。路径前缀按路径分量匹配，不把 /apiary 视作 /api 子路径。此 API 不向 agent 暴露为工具。
+
+独立聊天的主动测试必须绑定授权任务。创建对话支持 task_id，也可通过 PUT `/api/conversations/{id}/authorization` 修改；运行中拒绝换绑。对话页提供授权任务选择器。无授权的对话仍可分析，但不能主动接触目标。绑定的任务暂停、结束或授权时间到期后，目标访问拒绝。

