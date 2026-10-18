@@ -10,13 +10,13 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"github.com/Autumn-27/artex/db"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -169,7 +169,9 @@ func (g *TargetGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 func (g *TargetGateway) forward(w http.ResponseWriter, r *http.Request, tunnelAuthority string) {
 	if tunnelAuthority != "" {
-		if !strings.EqualFold(r.Host, tunnelAuthority) {
+		inner, innerErr := db.ParseTarget("https://" + r.Host)
+		tunnel, tunnelErr := db.ParseTarget("https://" + tunnelAuthority)
+		if innerErr != nil || tunnelErr != nil || inner.Host != tunnel.Host || inner.Port != tunnel.Port {
 			http.Error(w, "隧道目标与请求目标不一致", 403)
 			return
 		}
