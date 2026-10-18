@@ -176,8 +176,7 @@ func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response,
 		return i.rejectTargetRequest(req, err)
 	}
 	req = req.Clone(leaseCtx)
-	deadlineCancel := func() {}
-	release := func() { releaseLease(); deadlineCancel() }
+	release := releaseLease
 	op, err := i.AuthorizeRequest(req.Context(), req)
 	if err != nil {
 		release()
@@ -224,8 +223,9 @@ func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response,
 		deadline = taskDeadline
 	}
 	if deadline != nil {
-		var bound context.Context
-		bound, deadlineCancel = context.WithDeadline(leaseCtx, *deadline)
+		bound, cancelDeadline := context.WithDeadline(leaseCtx, *deadline)
+		previousRelease := release
+		release = func() { cancelDeadline(); previousRelease() }
 		req = req.Clone(bound)
 	}
 	id, err := i.db.BeginTargetRequest(req.Context(), TaskIDFromContext(req.Context()), op.Target, op.Method, account, p.Budget)
