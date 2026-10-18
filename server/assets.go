@@ -237,6 +237,7 @@ func (s *Server) addCompanyScope(w http.ResponseWriter, r *http.Request) {
 	if warning, err := cs.MalformedIPAssetWarning(); err == nil && warning != "" {
 		out["warnings"] = []string{warning}
 	}
+	s.cancelTargetAuthorization("")
 	writeJSON(w, 200, out)
 }
 
@@ -287,6 +288,7 @@ func (s *Server) deleteCompany(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	s.cancelTargetAuthorization("")
 	writeJSON(w, 200, map[string]any{"deleted": 1, "assets_deleted": assetsDeleted})
 }
 

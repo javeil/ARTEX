@@ -133,6 +133,7 @@ func (s *Server) interceptCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.m.interceptor.Invalidate()
+	s.cancelTargetAuthorization("")
 	writeJSON(w, 200, rule)
 }
 
@@ -161,6 +162,7 @@ func (s *Server) interceptUpdateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.m.interceptor.Invalidate()
+	s.cancelTargetAuthorization("")
 	writeJSON(w, 200, rule)
 }
 
@@ -179,6 +181,7 @@ func (s *Server) interceptDeleteRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.m.interceptor.Invalidate()
+	s.cancelTargetAuthorization("")
 	writeJSON(w, 200, map[string]any{"deleted": id})
 }
 
@@ -205,6 +208,7 @@ func (s *Server) interceptToggleRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.m.interceptor.Invalidate()
+	s.cancelTargetAuthorization("")
 	writeJSON(w, 200, map[string]any{"ok": true, "enabled": req.Enabled})
 }
 

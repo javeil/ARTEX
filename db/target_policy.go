@@ -402,6 +402,7 @@ func (d *DB) AuthorizationVersion(ctx context.Context, id string) (string, error
  'scope',(SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id) FROM task_scope s WHERE s.task_id=t.id AND s.source='manual'),
  'company',(SELECT jsonb_agg(to_jsonb(c) ORDER BY c.id) FROM company_scope c WHERE c.company_id IN (SELECT company_id FROM task_scope WHERE task_id=t.id AND kind='company' AND source='manual')),
  'exclude',(SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id) FROM task_intercept_rules r WHERE r.task_id=t.id),
+ 'tool_rules',(SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id) FROM intercept_rules r),
  'global',(SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id) FROM asset_intercept_rules r),
  'resources',(SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id) FROM target_test_resources r WHERE r.task_id=t.id::text),
  'constraints',(SELECT jsonb_agg(to_jsonb(c) ORDER BY c.id) FROM task_constraints c WHERE c.exploration_id=t.exploration_id AND c.origin='human')

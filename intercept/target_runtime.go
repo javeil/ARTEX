@@ -133,3 +133,19 @@ func (i *Interceptor) CancelTargetIO(id string) {
 		c()
 	}
 }
+
+// CancelAllTargetIO applies global authorization edits to already running work.
+// The next run may start, but must read the newly committed policy before IO.
+func (i *Interceptor) CancelAllTargetIO() {
+	i.runtime.mu.Lock()
+	cancels := []context.CancelFunc{}
+	for _, state := range i.runtime.tasks {
+		for _, cancel := range state.active {
+			cancels = append(cancels, cancel)
+		}
+	}
+	i.runtime.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+}

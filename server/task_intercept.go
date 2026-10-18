@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/Autumn-27/artex/db"
 )
@@ -101,6 +102,7 @@ func (s *Server) taskInterceptCreateRule(w http.ResponseWriter, r *http.Request)
 		writeErr(w, 500, err.Error())
 		return
 	}
+	s.cancelTargetAuthorization(strconv.FormatInt(taskID, 10))
 	writeJSON(w, 200, rule)
 }
 
@@ -133,6 +135,7 @@ func (s *Server) taskInterceptUpdateRule(w http.ResponseWriter, r *http.Request)
 		writeErr(w, 500, err.Error())
 		return
 	}
+	s.cancelTargetAuthorization(strconv.FormatInt(taskID, 10))
 	writeJSON(w, 200, rule)
 }
 
@@ -156,6 +159,7 @@ func (s *Server) taskInterceptDeleteRule(w http.ResponseWriter, r *http.Request)
 		writeErr(w, 500, err.Error())
 		return
 	}
+	s.cancelTargetAuthorization(strconv.FormatInt(taskID, 10))
 	writeJSON(w, 200, map[string]any{"deleted": deleted})
 }
 
@@ -185,5 +189,6 @@ func (s *Server) taskInterceptToggleRule(w http.ResponseWriter, r *http.Request)
 		writeErr(w, 500, err.Error())
 		return
 	}
+	s.cancelTargetAuthorization(strconv.FormatInt(taskID, 10))
 	writeJSON(w, 200, map[string]any{"ok": true, "enabled": req.Enabled})
 }
