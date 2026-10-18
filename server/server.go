@@ -983,6 +983,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/intercept/history/{id}", s.interceptDetail)
 	mux.HandleFunc("GET /api/intercept/history/{id}/execution", s.interceptExecution)
 	mux.HandleFunc("GET /api/intercept/task/{taskID}", s.interceptListTaskItems)
+	mux.HandleFunc("GET /api/intercept/scope-config", s.interceptScopeConfig)
+	mux.HandleFunc("PUT /api/intercept/scope-config", s.interceptScopeConfig)
 	mux.HandleFunc("GET /api/intercept/tool-config", s.interceptGetToolConfig)
 	mux.HandleFunc("PUT /api/intercept/tool-config", s.interceptSetToolConfig)
 	mux.HandleFunc("GET /api/intercept/judge", s.interceptGetJudgeConfig)
@@ -3799,6 +3801,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, cancel := context.WithCancelCause(s.ctx)
+	ctx = s.m.interceptor.WithScope(ctx)
 	ctx = intercept.WithReviewContext(ctx, "", intercept.ReviewBackground{Source: intercept.BackgroundUserMessage, Text: req.Message})
 	s.chatBusy[t.ID] = true
 	s.chatCancel[t.ID] = cancel

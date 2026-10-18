@@ -614,3 +614,40 @@ func (s *Server) interceptExecution(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{"conversation_id": target.ConversationID, "task_id": target.TaskID, "session": target.Session, "seq": target.Seq, "items": activityDTOs(target.Items)})
 }
+
+func (s *Server) interceptScopeConfig(w http.ResponseWriter, r *http.Request) {
+	pg := s.pg(w)
+	if pg == nil {
+		return
+	}
+	if r.Method == http.MethodPut {
+		var req struct {
+			Action string `json:"unknown_target_action"`
+		}
+		if err := decode(r, &req); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		switch req.Action {
+		case "ask", "deny", "allow":
+		default:
+			writeErr(w, 400, "unknown_target_action 必须是 ask、deny 或 allow")
+			return
+		}
+		if err := pg.SetSetting("scope_unknown_target_action", req.Action); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	action, _, err := pg.GetSetting("scope_unknown_target_action")
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	switch action {
+	case "ask", "deny", "allow":
+	default:
+		action = "ask"
+	}
+	writeJSON(w, 200, map[string]string{"unknown_target_action": action})
+}

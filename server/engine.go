@@ -333,6 +333,10 @@ func (e *Engine) execContextFor(parent context.Context, taskID string) context.C
 	if c := e.execCtx[taskID]; c != nil && c.Err() == nil {
 		return c
 	}
+	if e.m != nil && e.m.interceptor != nil {
+		parent = e.m.interceptor.WithScope(parent)
+	}
+	parent = intercept.WithTaskContext(parent, taskID, "", nil)
 	c, cancel := context.WithCancelCause(parent)
 	e.execCtx[taskID] = c
 	e.execCancel[taskID] = cancel

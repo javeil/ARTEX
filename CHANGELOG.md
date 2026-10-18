@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 执行边界加固
+
+- 任务网络授权在工具开关和 allow 规则前校验；HTTP 每跳复验；不透明调用默认 ask，支持 scope-config API。设计与迁移见 security/GUARDRAILS.md。
+
 ## [0.3.18] - 2026-10-12
 
 ### 审批审查

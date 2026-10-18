@@ -55,13 +55,18 @@ func newGuard(ic *intercept.Interceptor) *Guard {
 func (g *Guard) Hooks() *hook.Registry { return g.reg }
 
 func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) hook.Result {
+	tool, input, err := intercept.UnwrapToolCall(ev.ToolName, ev.Input)
+	if err != nil {
+		return g.block(ev.ToolName, systemBlockMessage(err.Error()), "")
+	}
+	ev.ToolName, ev.Input = tool, input
 	// Extract the shell-command surface for the audit log: Bash + the interactive-shell
 	// tools (shell_open's command, shell_send's text). Destructive/exfil gating is no
 	// longer hard-coded here — it now lives in the DB intercept rules, evaluated by
 	// applyIntercept below. Other tools record an empty command.
 	var cmd string
 	switch ev.ToolName {
-	case "Bash", "shell_open":
+	case "Bash", "Monitor", "shell_open":
 		var in struct {
 			Command string `json:"command"`
 		}
@@ -75,6 +80,16 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) hook.Result {
 		cmd = in.Text
 	}
 	g.record(ev.ToolName, "allow", "", cmd)
+	if hosts, unknown := intercept.ScopeTargets(ev.ToolName, ev.Input); g.interceptor == nil && intercept.TaskIDFromContext(ctx) != "" && (len(hosts) > 0 || unknown) {
+		return g.block(ev.ToolName, systemBlockMessage("目标不在本任务授权范围：范围校验器不可用"), cmd)
+	}
+	if g.interceptor != nil {
+		if dec, gated := g.interceptor.ScopeDecision(ctx, ev.ToolName, ev.Input); gated {
+			if result := g.applyDecision(ctx, ev, dec); result.Decision == "block" {
+				return result
+			}
+		}
+	}
 	return g.applyIntercept(ctx, ev)
 }
 
@@ -98,6 +113,10 @@ func (g *Guard) applyIntercept(ctx context.Context, ev hook.Event) hook.Result {
 		}
 		dec = d
 	}
+	return g.applyDecision(ctx, ev, dec)
+}
+
+func (g *Guard) applyDecision(ctx context.Context, ev hook.Event, dec intercept.Decision) hook.Result {
 	switch dec.Action {
 	case "deny":
 		// 观测:deny 命中不阻塞审批,直接记一条 denied（历史/任务拦截页可见）。
