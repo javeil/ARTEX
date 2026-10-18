@@ -176,7 +176,7 @@ func (i *Interceptor) loadLocked() error {
 		if r.MatchType == "regex" {
 			re, err := regexp.Compile(r.Pattern)
 			if err != nil {
-				continue // skip rules with bad regex rather than crashing
+				return fmt.Errorf("拦截规则 %d 正则无效: %w", r.ID, err)
 			}
 			cr.re = re
 		}
@@ -185,7 +185,10 @@ func (i *Interceptor) loadLocked() error {
 	i.cached = out
 
 	// Load enabled-tools set from settings, falling back to hard-coded defaults.
-	val, ok, _ := i.db.GetSetting("intercept_enabled_tools")
+	val, ok, err := i.db.GetSetting("intercept_enabled_tools")
+	if err != nil {
+		return err
+	}
 	if !ok {
 		m := make(map[string]bool, len(defaultEnabledTools))
 		for _, n := range defaultEnabledTools {
@@ -195,7 +198,7 @@ func (i *Interceptor) loadLocked() error {
 	} else {
 		var names []string
 		if json.Unmarshal([]byte(val), &names) != nil {
-			i.enabledTools = map[string]bool{}
+			return fmt.Errorf("拦截工具配置无法解析")
 		} else {
 			m := make(map[string]bool, len(names))
 			for _, n := range names {
@@ -242,7 +245,9 @@ func (i *Interceptor) IsToolEnabled(name string) bool {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.enabledTools == nil {
-		_ = i.loadLocked()
+		if err := i.loadLocked(); err != nil {
+			return true
+		}
 	}
 	return i.enabledTools[name]
 }
@@ -316,7 +321,7 @@ const (
 // Judge default values.
 const (
 	defaultJudgeTimeoutSecs      = 15
-	defaultJudgeFailAction       = "allow"
+	defaultJudgeFailAction       = "ask"
 	defaultJudgeAskTimeoutSecs   = 300
 	defaultJudgeAskTimeoutAction = "deny"
 	// DefaultIncompleteScriptAction keeps incomplete snapshots with the judge.
@@ -445,7 +450,7 @@ func (i *Interceptor) SetJudgeConfig(c JudgeConfig) error {
 
 // Judge runs the LLM fallback judge for a tool call that matched no rule. It
 // returns (Decision, true) when the judge produced a terminal verdict, or
-// (Decision{}, false) when the fallback is disabled or not wired (caller then
+// (Decision{}, false) when the fallback is disabled (caller then
 // keeps the current behavior: allow). On model error or an unparseable reply it
 // retries up to RetryCount times, then falls back to the configured FailAction.
 // Ask verdicts carry the human-approval
@@ -455,8 +460,13 @@ func (i *Interceptor) Judge(ctx context.Context, tool string, arguments json.Raw
 	i.mu.RLock()
 	rv := i.reviewer
 	i.mu.RUnlock()
-	if !cfg.Enabled || rv == nil {
+	if !cfg.Enabled {
 		return Decision{}, false
+	}
+	if rv == nil {
+		rv = func(context.Context, int64, string, ReviewInput) (Decision, error) {
+			return Decision{}, errors.New("判定器未接入")
+		}
 	}
 
 	cctx := ctx
@@ -542,8 +552,15 @@ func judgeActionLabel(action string) string {
 // Returns (Decision, true) for the first matching enabled rule, or
 // (Decision{}, false) if no rule matches.
 func (i *Interceptor) Match(toolName string, input []byte) (Decision, bool) {
+	return i.MatchContext(context.Background(), toolName, input)
+}
+
+func (i *Interceptor) MatchContext(ctx context.Context, toolName string, input []byte) (Decision, bool) {
 	rules, err := i.rules()
-	if err != nil || len(rules) == 0 {
+	if err != nil {
+		return Decision{Action: "ask", Message: "拦截规则加载失败，需要人工确认：" + err.Error(), TimeoutEnabled: true, TimeoutSeconds: 300, TimeoutAction: "deny"}, true
+	}
+	if len(rules) == 0 {
 		return Decision{}, false
 	}
 	for _, r := range rules {

@@ -276,6 +276,9 @@ ON CONFLICT (name) DO NOTHING`,
 	if err := d.seedDefaultInterceptRulesV2(); err != nil {
 		return fmt.Errorf("seed intercept rules v2: %w", err)
 	}
+	// Judge failure defaults are resolved on read by intercept.judgeConfig.
+	// Migration deliberately never writes llm_judge_fail_action: persisted values
+	// remain operator-owned; missing/empty/reset values now resolve to ask.
 	if err := d.seedDefaultInterceptRulesV3(); err != nil {
 		return fmt.Errorf("seed intercept rules v3: %w", err)
 	}
