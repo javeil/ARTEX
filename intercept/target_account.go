@@ -12,6 +12,9 @@ func operationAccount(p db.TargetPolicy, o Operation) (string, error) {
 	if o.Effect != "authenticate" {
 		return "", nil
 	}
+	if (o.BodyTruncated || o.OpaqueCredential) && (p.Budget.AccountAttempts > 0 || len(p.Accounts) > 0) {
+		return "", fmt.Errorf("登录载荷或凭据身份无法唯一检查，不能排除冲突身份")
+	}
 	field := ""
 	for _, r := range p.Operations {
 		if r.Effect == "authenticate" && r.Target.Matches(o.Target) && r.AccountField != "" {
@@ -27,6 +30,9 @@ func operationAccount(p db.TargetPolicy, o Operation) (string, error) {
 		fields = []string{field}
 	}
 	candidates := map[string]bool{}
+	if o.Account != "" {
+		candidates[o.Account] = true
+	}
 	values := map[string][]string{}
 	if u, e := url.Parse(o.Target.URL); e == nil {
 		for k, v := range u.Query() {

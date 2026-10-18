@@ -16,12 +16,14 @@ import (
 )
 
 type Operation struct {
-	ResourceETag string    `json:"resource_etag,omitempty"`
-	Target       db.Target `json:"target"`
-	Method       string    `json:"method,omitempty"`
-	Body         string    `json:"body,omitempty"`
-	Effect       string    `json:"effect"`
-	Account      string    `json:"account,omitempty"`
+	OpaqueCredential bool      `json:"opaque_credential,omitempty"`
+	BodyTruncated    bool      `json:"body_truncated,omitempty"`
+	ResourceETag     string    `json:"resource_etag,omitempty"`
+	Target           db.Target `json:"target"`
+	Method           string    `json:"method,omitempty"`
+	Body             string    `json:"body,omitempty"`
+	Effect           string    `json:"effect"`
+	Account          string    `json:"account,omitempty"`
 }
 type ConstraintConfirmation struct {
 	ID     int64  `json:"id"`
@@ -90,6 +92,13 @@ func classifyOperation(o Operation) string {
 	for _, key := range []string{"action", "operation", "op", "cmd"} {
 		if mutationValue.MatchString(values[key]) {
 			return "business_write"
+		}
+	}
+	if authPath.MatchString(o.Target.Path) {
+		for _, key := range []string{"username", "user", "email", "login", "account"} {
+			if values[key] != "" {
+				return "authenticate"
+			}
 		}
 	}
 	if o.Method == "GET" || o.Method == "HEAD" || o.Method == "OPTIONS" {
@@ -263,7 +272,7 @@ func (i *Interceptor) TrustedTaskPolicy(ctx context.Context) (*TrustedPolicy, er
 func effectiveOperation(p db.TargetPolicy, o Operation) Operation {
 	// User bindings can identify an otherwise ambiguous operation. Explicit
 	// destructive evidence is never hidden by a generic read/probe binding.
-	if o.Effect == "unknown_write" || o.Effect == "authenticate" {
+	if o.Effect == "unknown_write" || o.Effect == "read" {
 		for _, rule := range p.Operations {
 			if !rule.Target.Matches(o.Target) {
 				continue

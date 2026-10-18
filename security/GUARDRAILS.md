@@ -42,7 +42,7 @@ SDK 的 ExecuteExtraTool 转发器会先解包再检查实际工具，避免直�
 
 每个授权 run 建立独立 HTTP(S) 目标网关，强制检查实际重定向、HTTPS 解密后的路径/方法和业务副作用，既不依赖抓包开关也不在拒绝后透传。Bash 的 curl/wget 固定网关并禁用外部客户端配置；禁止覆盖 proxy、目标映射和 --next。Python/Node 等遵守代理的客户端继承任务网关。浏览器 MCP 使用临时任务配置，将后续页面/脚本请求送入同一检查点。原生 WebFetch/自定义 HTTP 通过同一请求检查方法执行；TargetHTTP 支持任意 HTTP 方法、头和载荷，大响应完整流式写入任务产物并提供 SHA-256，不截断数据库导出。只要启用账号范围/请求预算，就拒绝无法逐请求观测的原始套接字、扫描脚本及远端 Shell；服务/只读等严格策略也不能用不透明调用审批豁免。可识别的 nmap/nc 参数保留 TCP/UDP 端口及 CIDR；未指定的端口不符合端口限定，NSE/外部配置等归为不透明调用。标准、仅主机范围且未设预算的任务仍保留可配置的不透明调用审批；不宣称这是任意代码的逐包强制边界。
 
-budget 可设置 requests_per_second、max_concurrent、max_requests、account_attempts/account_window_seconds、consecutive_failures、max_latency_ms、cooldown_seconds。0 表示该项未配置上限；部署者按许可与目标承载能力设置，不假设一个通用安全速率。真实 HTTP 请求在发送前通过 PostgreSQL 事务/服务锁预留额度：同一 scheme + host + port 服务键跨任务、worker 和实例共享 RPS、并发与账号窗口（同机不同域名不自动合并），累计请求按任务约束。账号范围/预算开启时，登录请求无法唯一确认账号、存在重复 JSON 身份键、参数值冲突或超出检查上限时拒绝；未知写操作需先由用户声明接口用途。不能凭 agent 自报绕过。对自定义登录协议应配置 authenticate + account_field；无法从协议识别的操作不应误称已获得账号级覆盖。
+budget 可设置 requests_per_second、max_concurrent、max_requests、account_attempts/account_window_seconds、consecutive_failures、max_latency_ms、cooldown_seconds。0 表示该项未配置上限；部署者按许可与目标承载能力设置，不假设一个通用安全速率。真实 HTTP 请求在发送前通过 PostgreSQL 事务/服务锁预留额度：同一 scheme + host + port 服务键跨任务、worker 和实例共享 RPS、并发与账号窗口（同机不同域名不自动合并），累计请求按任务约束。账号范围/预算开启时，实际 Basic/表单/JSON/GET 登录请求无法唯一确认账号、Authorization 头重复、存在重复 JSON 身份键、参数值冲突或超出检查上限时拒绝；账号限制下不透明 Bearer/Digest 凭据也不能靠 body 自报用户名放行；未知写操作需先由用户声明接口用途。不能凭 agent 自报绕过。对自定义登录协议应配置 authenticate + account_field；此处限定可识别登录尝试的账号，不声称能验证任意 Cookie/外部 token 已属于谁，未知身份协议需要适配。
 
 实际请求及完成状态保存在 target_requests，可用 GET `/api/tasks/{id}/target-requests` 游标分页。429 尊重 Retry-After，账号锁定和连续失败/首响应延迟超限对同一服务设置共享冷却；普通 403/WAF 不触发“靶机损坏”熔断。未结束记录保留为 running，重启不会把缺少完成证据的请求静默当作已结束。
 

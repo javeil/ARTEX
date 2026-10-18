@@ -88,6 +88,7 @@ func RequestOperation(req *http.Request) (Operation, error) {
 		req.Body = &replayReadCloser{Reader: io.MultiReader(bytes.NewReader(b), original), closer: original}
 		if len(b) > 1<<20 {
 			o.Body = "[request body exceeds review limit]"
+			o.BodyTruncated = true
 			o.Effect = "unknown_write"
 		} else {
 			o.Body = string(b)
@@ -95,6 +96,14 @@ func RequestOperation(req *http.Request) (Operation, error) {
 	}
 	if o.Effect == "" {
 		o.Effect = classifyOperation(o)
+	}
+	if req.Header.Get("Authorization") != "" && (o.Effect == "read" || o.Effect == "unknown_write" || o.Effect == "authenticate") {
+		o.Effect = "authenticate"
+		if username, _, ok := req.BasicAuth(); ok && len(req.Header.Values("Authorization")) == 1 {
+			o.Account = username
+		} else {
+			o.OpaqueCredential = true
+		}
 	}
 	return o, nil
 }
