@@ -175,7 +175,7 @@ func (s *Server) interceptDeleteRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := pg.DeleteInterceptRule(id); err != nil {
-		writeErr(w, 500, err.Error())
+		writeErr(w, 409, err.Error())
 		return
 	}
 	s.m.interceptor.Invalidate()
@@ -193,14 +193,15 @@ func (s *Server) interceptToggleRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Enabled bool `json:"enabled"`
+		Enabled bool   `json:"enabled"`
+		Reason  string `json:"reason"`
 	}
 	if err := decode(r, &req); err != nil {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	if err := pg.ToggleInterceptRule(id, req.Enabled); err != nil {
-		writeErr(w, 500, err.Error())
+	if err := pg.ToggleInterceptRule(id, req.Enabled, db.RuleChange{Actor: "ARTEX administrator", Reason: req.Reason}); err != nil {
+		writeErr(w, 400, err.Error())
 		return
 	}
 	s.m.interceptor.Invalidate()

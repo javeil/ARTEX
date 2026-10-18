@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/intercept"
+	"github.com/Autumn-27/artex/internal/shellguard"
 	"github.com/Autumn-27/norma/hook"
 )
 
@@ -80,6 +81,9 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) hook.Result {
 		cmd = in.Text
 	}
 	g.record(ev.ToolName, "allow", "", cmd)
+	if reason := shellguard.Check(cmd); reason != "" {
+		return g.block(ev.ToolName, systemBlockMessage("核心防护："+reason), cmd)
+	}
 	if hosts, unknown := intercept.ScopeTargets(ev.ToolName, ev.Input); g.interceptor == nil && intercept.TaskIDFromContext(ctx) != "" && (len(hosts) > 0 || unknown) {
 		return g.block(ev.ToolName, systemBlockMessage("目标不在本任务授权范围：范围校验器不可用"), cmd)
 	}

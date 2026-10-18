@@ -1299,8 +1299,8 @@ export const api = {
   updateInterceptRule: (id: number, rule: Omit<InterceptRule, "id" | "created_at" | "updated_at">) =>
     put<InterceptRule>(`/intercept/rules/${id}`, rule),
   deleteInterceptRule: (id: number) => del<{ deleted: number }>(`/intercept/rules/${id}`),
-  toggleInterceptRule: (id: number, enabled: boolean) =>
-    post<{ ok: boolean; enabled: boolean }>(`/intercept/rules/${id}/toggle`, { enabled }),
+  toggleInterceptRule: (id: number, enabled: boolean, reason?: string) =>
+    post<{ ok: boolean; enabled: boolean }>(`/intercept/rules/${id}/toggle`, { enabled, reason }),
 
   // ---- asset intercept rules（资产拦截：全局黑名单） ----
   assetInterceptRules: () => get<{ rules: AssetInterceptRule[] }>("/asset-intercept/rules").then((r) => arr(r.rules)),

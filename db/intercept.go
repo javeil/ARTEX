@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -11,20 +12,22 @@ import (
 
 // InterceptRule is one row of intercept_rules.
 type InterceptRule struct {
-	ID             int64     `json:"id"`
-	Name           string    `json:"name"`
-	Enabled        bool      `json:"enabled"`
-	Priority       int       `json:"priority"`
-	MatchTarget    string    `json:"match_target"`
-	MatchType      string    `json:"match_type"`
-	Pattern        string    `json:"pattern"`
-	Action         string    `json:"action"`
-	Message        string    `json:"message"`
-	TimeoutEnabled bool      `json:"timeout_enabled"`
-	TimeoutSeconds int       `json:"timeout_seconds"`
-	TimeoutAction  string    `json:"timeout_action"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID                     int64     `json:"id"`
+	Name                   string    `json:"name"`
+	Enabled                bool      `json:"enabled"`
+	Protected              bool      `json:"protected"`
+	CoreProtectionDisabled bool      `json:"core_protection_disabled"`
+	Priority               int       `json:"priority"`
+	MatchTarget            string    `json:"match_target"`
+	MatchType              string    `json:"match_type"`
+	Pattern                string    `json:"pattern"`
+	Action                 string    `json:"action"`
+	Message                string    `json:"message"`
+	TimeoutEnabled         bool      `json:"timeout_enabled"`
+	TimeoutSeconds         int       `json:"timeout_seconds"`
+	TimeoutAction          string    `json:"timeout_action"`
+	CreatedAt              time.Time `json:"created_at"`
+	UpdatedAt              time.Time `json:"updated_at"`
 }
 
 // InterceptPending is one row of intercept_pending.
@@ -43,14 +46,15 @@ type InterceptPending struct {
 	CreatedAt      time.Time       `json:"created_at"`
 }
 
-const interceptRuleCols = `id, name, enabled, priority, match_target, match_type, pattern, action, message, timeout_enabled, timeout_seconds, timeout_action, created_at, updated_at`
+const interceptRuleCols = `id, name, enabled, priority, match_target, match_type, pattern, action, message, timeout_enabled, timeout_seconds, timeout_action, created_at, updated_at, protected`
 
 func scanInterceptRule(row interface{ Scan(...any) error }) (InterceptRule, error) {
 	var r InterceptRule
 	err := row.Scan(&r.ID, &r.Name, &r.Enabled, &r.Priority,
 		&r.MatchTarget, &r.MatchType, &r.Pattern, &r.Action, &r.Message,
 		&r.TimeoutEnabled, &r.TimeoutSeconds, &r.TimeoutAction,
-		&r.CreatedAt, &r.UpdatedAt)
+		&r.CreatedAt, &r.UpdatedAt, &r.Protected)
+	r.CoreProtectionDisabled = r.Protected && !r.Enabled
 	return r, err
 }
 
@@ -89,22 +93,65 @@ UPDATE intercept_rules
    SET name=$2, enabled=$3, priority=$4, match_target=$5,
        match_type=$6, pattern=$7, action=$8, message=$9,
        timeout_enabled=$10, timeout_seconds=$11, timeout_action=$12
-WHERE id=$1
+WHERE id=$1 AND NOT protected
 RETURNING `+interceptRuleCols,
 		id, name, enabled, priority, matchTarget, matchType, pattern, action, message, timeoutEnabled, timeoutSeconds, timeoutAction)
-	return scanInterceptRule(row)
+	r, err := scanInterceptRule(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		var protected bool
+		if e := d.QueryRow(`SELECT protected FROM intercept_rules WHERE id=$1`, id).Scan(&protected); e == nil && protected {
+			return r, ErrProtectedRule
+		}
+	}
+	return r, err
 }
 
-// DeleteInterceptRule removes a rule.
+var ErrProtectedRule = errors.New("核心防护规则不可删除或编辑；禁用须填写原因并审计")
+
+type RuleChange struct{ Actor, Reason string }
+
+// DeleteInterceptRule refuses protected rows atomically, including callers that
+// bypass the HTTP handler. A missing row retains the previous idempotent behavior.
 func (d *DB) DeleteInterceptRule(id int64) error {
-	_, err := d.Exec(`DELETE FROM intercept_rules WHERE id=$1`, id)
+	var protected bool
+	err := d.QueryRow(`DELETE FROM intercept_rules WHERE id=$1 AND NOT protected RETURNING protected`, id).Scan(&protected)
+	if errors.Is(err, sql.ErrNoRows) {
+		if e := d.QueryRow(`SELECT protected FROM intercept_rules WHERE id=$1`, id).Scan(&protected); e == nil && protected {
+			return ErrProtectedRule
+		}
+		return nil
+	}
 	return err
 }
 
-// ToggleInterceptRule flips the enabled state of a rule.
-func (d *DB) ToggleInterceptRule(id int64, enabled bool) error {
-	_, err := d.Exec(`UPDATE intercept_rules SET enabled=$2 WHERE id=$1`, id, enabled)
-	return err
+// ToggleInterceptRule locks the row and commits the state change and attribution
+// together. An audit write failure cannot silently disable a core rule.
+func (d *DB) ToggleInterceptRule(id int64, enabled bool, changes ...RuleChange) error {
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var protected, old bool
+	if err = tx.QueryRow(`SELECT protected,enabled FROM intercept_rules WHERE id=$1 FOR UPDATE`, id).Scan(&protected, &old); err != nil {
+		return err
+	}
+	var change RuleChange
+	if len(changes) > 0 {
+		change = changes[0]
+	}
+	if protected && !enabled && (strings.TrimSpace(change.Actor) == "" || strings.TrimSpace(change.Reason) == "") {
+		return fmt.Errorf("禁用核心防护必须提供操作人及原因")
+	}
+	if protected && old != enabled {
+		if _, err = tx.Exec(`INSERT INTO intercept_rule_changes(rule_id,actor,reason,enabled) VALUES ($1,$2,$3,$4)`, id, change.Actor, change.Reason, enabled); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.Exec(`UPDATE intercept_rules SET enabled=$2 WHERE id=$1`, id, enabled); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // CreateInterceptPending inserts a pending approval record and returns its ID.

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/config"
+	"github.com/Autumn-27/artex/internal/shellguard"
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx database/sql driver ("pgx")
 )
@@ -281,6 +282,11 @@ ON CONFLICT (name) DO NOTHING`,
 	// remain operator-owned; missing/empty/reset values now resolve to ask.
 	if err := d.seedDefaultInterceptRulesV3(); err != nil {
 		return fmt.Errorf("seed intercept rules v3: %w", err)
+	}
+	for _, name := range shellguard.CoreNames {
+		if _, err := d.Exec(`UPDATE intercept_rules SET protected=true WHERE name=$1 AND NOT protected`, name); err != nil {
+			return err
+		}
 	}
 	if err := d.seedDefaultAssetInterceptRules(); err != nil {
 		return fmt.Errorf("seed asset intercept rules: %w", err)

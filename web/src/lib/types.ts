@@ -1291,6 +1291,8 @@ export type InterceptMatchType = "string" | "regex";
 
 export interface InterceptRule {
   id: number;
+  protected?: boolean;
+  core_protection_disabled?: boolean;
   name: string;
   enabled: boolean;
   priority: number;

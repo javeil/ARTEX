@@ -610,7 +610,13 @@ export default function InterceptPage() {
 
   async function handleToggle(rule: InterceptRule) {
     try {
-      await api.toggleInterceptRule(rule.id, !rule.enabled);
+      let reason: string | undefined;
+      if (rule.protected && rule.enabled) {
+        const entered = window.prompt("请填写禁用核心防护的原因（将记录审计日志；Guard 独立兜底仍然生效）");
+        if (!entered?.trim()) return;
+        reason = entered.trim();
+      }
+      await api.toggleInterceptRule(rule.id, !rule.enabled, reason);
       load();
     } catch (e) {
       toast.error((e as Error).message);
@@ -755,11 +761,15 @@ export default function InterceptPage() {
               </TableHeader>
               <TableBody>
                 {rules.map((rule) => (
-                  <TableRow key={rule.id} className={!rule.enabled ? "opacity-40" : ""}>
+                  <TableRow key={rule.id} className={rule.core_protection_disabled ? "bg-destructive/10" : !rule.enabled ? "opacity-40" : ""}>
                     <TableCell>
                       <span className="font-mono text-xs tabular-nums">{rule.priority}</span>
                     </TableCell>
-                    <TableCell className="font-medium text-sm">{rule.name}</TableCell>
+                    <TableCell className="font-medium text-sm">{rule.name}
+                      {rule.protected && <span className={rule.core_protection_disabled ? "ml-2 text-destructive" : "ml-2 text-muted-foreground"}>
+                        {rule.core_protection_disabled ? "核心防护已禁用（独立兜底仍生效）" : "核心防护"}
+                      </span>}
+                    </TableCell>
                     <TableCell>
                       <span className="text-xs text-muted-foreground">
                         {rule.match_target === "tool_name" ? "工具名" : "输入内容"}
@@ -788,6 +798,7 @@ export default function InterceptPage() {
                       <div className="flex items-center justify-end gap-0.5">
                         <Button
                           size="icon" variant="ghost" className="h-7 w-7"
+                          disabled={rule.protected}
                           onClick={() => openEdit(rule)}
                         >
                           <PencilIcon className="h-3.5 w-3.5" />
@@ -795,6 +806,7 @@ export default function InterceptPage() {
                         <Button
                           size="icon" variant="ghost"
                           className="h-7 w-7 text-destructive hover:text-destructive"
+                          disabled={rule.protected}
                           onClick={() => handleDelete(rule.id)}
                         >
                           <Trash2Icon className="h-3.5 w-3.5" />
