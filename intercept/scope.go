@@ -44,16 +44,38 @@ func CheckURL(ctx context.Context, raw string) error {
 }
 
 func (i *Interceptor) CheckTarget(ctx context.Context, raw string) error {
+	target, err := db.ParseTarget(raw)
+	if err != nil {
+		return err
+	}
+	return i.checkTargetSpec(ctx, target)
+}
+func (i *Interceptor) checkTargetSpec(ctx context.Context, target db.Target) error {
 	id := TaskIDFromContext(ctx)
 	if id == "" {
 		return fmt.Errorf("目标不在本任务授权范围：主动测试必须绑定授权任务")
 	}
-	t, err := db.ParseTarget(raw)
+	if err := i.db.CheckTaskTarget(ctx, id, target); err != nil {
+		return fmt.Errorf("目标不在本任务授权范围：%w", err)
+	}
+	trusted, err := i.TrustedTaskPolicy(ctx)
 	if err != nil {
 		return err
 	}
-	if err = i.db.CheckTaskTarget(ctx, id, t); err != nil {
-		return fmt.Errorf("目标不在本任务授权范围：%w", err)
+	if len(trusted.Unconfirmed) > 0 {
+		return fmt.Errorf("人工操作约束尚未确认落实到可执行策略，请在目标行为控制面板逐条确认")
+	}
+	if trusted.Policy.Mode == "passive" {
+		return fmt.Errorf("任务仅允许被动分析，不能访问目标")
+	}
+	if len(trusted.HumanPorts) > 0 {
+		ok := false
+		for _, p := range trusted.HumanPorts {
+			ok = ok || p == target.Port
+		}
+		if !ok {
+			return fmt.Errorf("目标端口违反人工明确限制")
+		}
 	}
 	return nil
 }
@@ -76,8 +98,8 @@ func (i *Interceptor) ScopeDecision(ctx context.Context, tool string, input []by
 	if GatewayFromContext(ctx) == nil && shellFollowsRedirects(tool, input) {
 		return Decision{Action: "deny", Message: "Bash 自动重定向无法逐跳确认授权范围，请改用 WebFetch 或关闭重定向"}, true
 	}
-	for _, h := range ScopeTargetDetails(tool, input, hosts) {
-		if err := i.CheckTarget(ctx, h); err != nil {
+	for _, t := range ScopeTargetRecords(tool, input, hosts) {
+		if err := i.checkTargetSpec(ctx, t); err != nil {
 			return Decision{Action: "deny", Message: err.Error()}, true
 		}
 	}
@@ -85,7 +107,29 @@ func (i *Interceptor) ScopeDecision(ctx context.Context, tool string, input []by
 	if strings.EqualFold(tool, "webfetch") && unknown {
 		return Decision{Action: "deny", Message: "目标不在本任务授权范围：无法确认 HTTP 目标"}, true
 	}
-	if unknown {
+	if unknown || len(hosts) > 0 {
+		policy, err := i.TrustedTaskPolicy(ctx)
+		if err != nil {
+			return Decision{Action: "deny", Message: "无法读取目标操作授权，拒绝不透明执行：" + err.Error()}, true
+		}
+		if len(policy.Unconfirmed) > 0 {
+			return Decision{Action: "deny", Message: "人工操作约束尚未确认落实到可执行策略"}, true
+		}
+		strict := policy.Policy.Mode != "standard" || len(policy.Policy.Targets) > 0 || len(policy.Policy.DeniedEffects) > 0 || len(policy.Policy.Accounts) > 0 || policy.Policy.Budget != (db.TargetBudget{})
+		requiresObservation := len(policy.Policy.Accounts) > 0 || policy.Policy.Budget != (db.TargetBudget{})
+		observable := observableHTTPCall(tool, input) || GatewayMCPObservable(ctx, tool)
+		if requiresObservation && !observable {
+			return Decision{Action: "deny", Message: "当前工具无法逐请求执行目标/账号预算，请使用 TargetHTTP 或已适配的 HTTP 工具"}, true
+		}
+		if (requiresObservation || unknown && strict) && observable && (tool == "Bash" || tool == "Monitor" || tool == "shell_open") && GatewayFromContext(ctx) == nil {
+			return Decision{Action: "deny", Message: "当前 HTTP 命令没有绑定任务目标网关"}, true
+		}
+		if unknown && strict && !observable {
+			return Decision{Action: "deny", Message: "本任务要求可观测的目标限制/预算，请改用 TargetHTTP 或已适配的 HTTP 工具；审批不能豁免任务限制"}, true
+		}
+		if !unknown || (observable && GatewayFromContext(ctx) != nil) {
+			return Decision{}, false
+		}
 		action := i.getSettingChoice("scope_unknown_target_action", "ask", "ask", "deny", "allow")
 		return Decision{Action: action, Message: "无法静态确认本次调用的全部网络目标，需要确认授权范围", TimeoutEnabled: true, TimeoutSeconds: 300, TimeoutAction: "deny"}, true
 	}
@@ -205,7 +249,7 @@ func ScopeTargets(tool string, input []byte) (hosts []string, unknown bool) {
 				}
 				if network && (strings.HasPrefix(arg, "--") || strings.HasPrefix(arg, "-")) {
 					switch {
-					case arg == "-L", strings.Contains(arg, "location"), strings.Contains(arg, "config"), arg == "-K", arg == "-iL", arg == "--input-file", strings.Contains(arg, "proxy"), strings.Contains(arg, "resolve"), strings.Contains(arg, "connect-to"), strings.Contains(arg, "interface"), strings.Contains(arg, "globoff"):
+					case arg == "-L", strings.Contains(arg, "location"), strings.Contains(arg, "config"), arg == "-K", arg == "-iL", arg == "--input-file", strings.HasPrefix(arg, "--script"), strings.HasPrefix(arg, "--datadir"), strings.HasPrefix(arg, "--resume"), strings.Contains(arg, "proxy"), strings.Contains(arg, "resolve"), strings.Contains(arg, "connect-to"), strings.Contains(arg, "interface"), strings.Contains(arg, "globoff"):
 						unknown = true
 					}
 				}
@@ -316,7 +360,7 @@ func ScopeTargetDetails(tool string, input []byte, hosts []string) []string {
 	_ = json.Unmarshal(input, &obj)
 	values := []string{}
 	covered := map[string]bool{}
-	if strings.EqualFold(tool, "WebFetch") || tool == "TargetRequest" {
+	if strings.EqualFold(tool, "WebFetch") || (tool == "TargetRequest" || tool == "TargetHTTP") {
 		var v string
 		_ = json.Unmarshal(obj["url"], &v)
 		values = append(values, v)
@@ -344,4 +388,46 @@ func ScopeTargetDetails(tool string, input []byte, hosts []string) []string {
 		}
 	}
 	return values
+}
+
+func observableHTTPCall(tool string, input []byte) bool {
+	if tool == "WebFetch" || tool == "TargetRequest" || tool == "TargetHTTP" {
+		return true
+	}
+	if tool != "Bash" && tool != "Monitor" && tool != "shell_open" {
+		return false
+	}
+	var in struct {
+		Command string `json:"command"`
+	}
+	_ = json.Unmarshal(input, &in)
+	tree, e := syntax.NewParser().Parse(strings.NewReader(in.Command), "http-adapter")
+	if e != nil {
+		return false
+	}
+	ok := true
+	found := false
+	syntax.Walk(tree, func(n syntax.Node) bool {
+		c, is := n.(*syntax.CallExpr)
+		if !is {
+			return true
+		}
+		if len(c.Args) == 0 || len(c.Assigns) > 0 {
+			ok = false
+			return true
+		}
+		name, k := operationWord(c.Args[0])
+		if !k {
+			ok = false
+			return false
+		}
+		switch filepath.Base(name) {
+		case "curl", "wget":
+			found = true
+		default:
+			ok = false
+		}
+		return true
+	})
+	return ok && found
 }

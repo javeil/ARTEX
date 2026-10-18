@@ -59,6 +59,7 @@ func (g *Guard) Hooks() *hook.Registry { return g.reg }
 type auditKey struct{}
 
 func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) (result hook.Result) {
+	grantVersion := ""
 	a := &db.ToolCallAudit{TaskID: intercept.TaskIDFromContext(ctx), ToolName: ev.ToolName, InputSummary: inputSummary(ev.Input), Decision: "allow", EffectiveAction: "allow", Source: "default_allow"}
 	ctx = context.WithValue(ctx, auditKey{}, a)
 	defer func() {
@@ -70,6 +71,9 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) (result hook.Resu
 		}
 		if err := g.persistAudit(ctx, a); err != nil {
 			result = hook.Result{Decision: "block", Message: systemBlockMessage("调用审计写入失败，安全停止：" + err.Error())}
+		}
+		if result.Decision != "block" && grantVersion != "" && g.interceptor != nil {
+			g.interceptor.GrantOperations(ctx, ev.ToolName, ev.Input, grantVersion)
 		}
 		action := "allow"
 		if result.Decision == "block" {
@@ -123,7 +127,7 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) (result hook.Resu
 			if result := g.applyDecision(ctx, ev, dec); result.Decision == "block" {
 				return result
 			}
-			g.interceptor.GrantOperations(ctx, ev.ToolName, ev.Input)
+			grantVersion = dec.AuthorizationVersion
 		}
 	}
 	result = g.applyIntercept(ctx, ev)

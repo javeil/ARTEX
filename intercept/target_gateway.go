@@ -37,6 +37,7 @@ type TargetGateway struct {
 	transport http.RoundTripper
 	mu        sync.Mutex
 	tunnels   map[net.Conn]bool
+	mcpTools  map[string]bool
 }
 
 func GatewayFromContext(ctx context.Context) *TargetGateway {
@@ -191,7 +192,8 @@ func (g *TargetGateway) forward(w http.ResponseWriter, r *http.Request, tunnelAu
 		out.RequestURI = ""
 	}, Transport: g.transport, FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			http.Error(w, "【ARTEX 目标管控】"+err.Error(), http.StatusForbidden)
+			w.Header().Set("X-ARTEX-Target-Control", "blocked")
+			http.Error(w, "【ARTEX 目标管控·非目标防御】"+err.Error(), http.StatusForbidden)
 		},
 	}
 	proxy.ServeHTTP(w, req)
@@ -267,3 +269,23 @@ func (l *gatewayOneListener) Accept() (net.Conn, error) {
 }
 func (l *gatewayOneListener) Close() error   { return l.conn.Close() }
 func (l *gatewayOneListener) Addr() net.Addr { return l.addr }
+
+func MarkGatewayMCP(ctx context.Context, name string) {
+	if g := GatewayFromContext(ctx); g != nil {
+		g.mu.Lock()
+		if g.mcpTools == nil {
+			g.mcpTools = map[string]bool{}
+		}
+		g.mcpTools[name] = true
+		g.mu.Unlock()
+	}
+}
+func GatewayMCPObservable(ctx context.Context, name string) bool {
+	g := GatewayFromContext(ctx)
+	if g == nil {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.mcpTools[name]
+}

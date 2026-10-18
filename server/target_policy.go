@@ -1,6 +1,9 @@
 package server
 
 import (
+	"encoding/json"
+	"github.com/Autumn-27/artex/intercept"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -30,8 +33,15 @@ func (s *Server) targetPolicy(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPut {
 		r.Body = http.MaxBytesReader(w, r.Body, 256<<10)
 		var p db.TargetPolicy
-		if err := decode(r, &p); err != nil {
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&p); err != nil {
 			writeErr(w, 400, err.Error())
+			return
+		}
+		var extra any
+		if e := decoder.Decode(&extra); e != io.EOF {
+			writeErr(w, 400, "策略只能包含一个 JSON 对象")
 			return
 		}
 		if err := p.Validate(); err != nil {
@@ -56,7 +66,12 @@ func (s *Server) targetPolicy(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]any{"policy": p, "authorization_version": revision})
+	trusted, err := s.m.interceptor.TrustedTaskPolicy(intercept.WithTaskContext(r.Context(), id, "", nil))
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"policy": p, "authorization_version": revision, "effective_policy": trusted.Policy, "unconfirmed_constraints": trusted.Unconfirmed})
 }
 
 func (s *Server) bindConversationAuthorization(w http.ResponseWriter, r *http.Request) {

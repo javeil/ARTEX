@@ -75,7 +75,7 @@ func (d *DB) BeginTargetRequest(ctx context.Context, taskID string, target Targe
 		return out
 	}
 	var active, recent, total int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE state='running'),count(*) FILTER (WHERE started_at>now()-interval '1 second') FROM target_requests WHERE target_key=$1 AND (state='running' OR started_at>now()-interval '1 second')`, key).Scan(&active, &recent); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE state='running'),count(*) FILTER (WHERE started_at>now()-interval '1 second') FROM target_requests WHERE target_key=$1 AND state<>'denied' AND (state='running' OR started_at>now()-interval '1 second')`, key).Scan(&active, &recent); err != nil {
 		return 0, err
 	}
 	if cap := strict(func(b TargetBudget) int { return b.MaxConcurrent }); cap > 0 && active >= cap {
@@ -85,7 +85,7 @@ func (d *DB) BeginTargetRequest(ctx context.Context, taskID string, target Targe
 		return 0, fmt.Errorf("目标速率预算已达上限 %d/s", cap)
 	}
 	if budget.MaxRequests > 0 {
-		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM target_requests WHERE task_id=$1`, taskID).Scan(&total); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM target_requests WHERE task_id=$1 AND state<>'denied'`, taskID).Scan(&total); err != nil {
 			return 0, err
 		}
 		if total >= budget.MaxRequests {
@@ -103,7 +103,7 @@ func (d *DB) BeginTargetRequest(ctx context.Context, taskID string, target Targe
 				continue
 			}
 			var attempts int
-			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM target_requests WHERE target_key=$1 AND account_hash=$2 AND started_at>now()-($3 * interval '1 second')`, key, digest, b.AccountWindowSeconds).Scan(&attempts); err != nil {
+			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM target_requests WHERE target_key=$1 AND state<>'denied' AND account_hash=$2 AND started_at>now()-($3 * interval '1 second')`, key, digest, b.AccountWindowSeconds).Scan(&attempts); err != nil {
 				return 0, err
 			}
 			if attempts >= b.AccountAttempts {
@@ -143,6 +143,19 @@ func (d *DB) FinishTargetRequest(ctx context.Context, id int64, status, latencyM
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO target_safety_state(target_key) VALUES ($1) ON CONFLICT DO NOTHING`, key); err != nil {
 		return err
+	}
+	var sharedFailures, sharedLatency, sharedCooldown int
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(min((c.budget->>'consecutive_failures')::int) FILTER(WHERE (c.budget->>'consecutive_failures')::int>0),0),COALESCE(min((c.budget->>'max_latency_ms')::int) FILTER(WHERE (c.budget->>'max_latency_ms')::int>0),0),COALESCE(max((c.budget->>'cooldown_seconds')::int),0) FROM target_budget_claims c JOIN tasks t ON t.id::text=c.task_id WHERE c.target_key=$1 AND NOT t.paused AND NOT t.queued AND t.archived_at IS NULL AND t.status NOT IN ('done','failed','timeout')`, key).Scan(&sharedFailures, &sharedLatency, &sharedCooldown); err != nil {
+		return err
+	}
+	if sharedFailures > 0 && (b.ConsecutiveFailures == 0 || sharedFailures < b.ConsecutiveFailures) {
+		b.ConsecutiveFailures = sharedFailures
+	}
+	if sharedLatency > 0 && (b.MaxLatencyMS == 0 || sharedLatency < b.MaxLatencyMS) {
+		b.MaxLatencyMS = sharedLatency
+	}
+	if sharedCooldown > b.CooldownSeconds {
+		b.CooldownSeconds = sharedCooldown
 	}
 	failed := status >= 500 || requestErr != "" || (b.MaxLatencyMS > 0 && latencyMS > b.MaxLatencyMS)
 	var failures int
@@ -216,4 +229,14 @@ func (d *DB) ListTargetRequests(ctx context.Context, id string, before int64, li
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+func (d *DB) RecordDeniedTargetRequest(ctx context.Context, taskID string, target Target, method, reason string) error {
+	_, e := d.ExecContext(ctx, `INSERT INTO target_requests(task_id,target_key,url,method,budget,state,status_code,error,finished_at) VALUES ($1,$2,$3,$4,'{}','denied',403,$5,now())`, taskID, target.ServiceKey(), target.URL, method, reason)
+	return e
+}
+func (d *DB) TargetHasAccountBudget(ctx context.Context, key string) (bool, error) {
+	var enabled bool
+	e := d.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM target_budget_claims c JOIN tasks t ON t.id::text=c.task_id WHERE c.target_key=$1 AND COALESCE((c.budget->>'account_attempts')::int,0)>0 AND NOT t.paused AND NOT t.queued AND t.archived_at IS NULL AND t.status NOT IN ('done','failed','timeout'))`, key).Scan(&enabled)
+	return enabled, e
 }

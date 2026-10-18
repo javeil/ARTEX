@@ -40,3 +40,37 @@ func TestTargetPolicyEnforcesExclusionsAndServiceBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestCanonicalURLAndCIDRExclusionsCannotBeBypassed(t *testing.T) {
+	d, e := Open(testDSN(t))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer d.Close()
+	task, e := d.CreateTask("canonical exclusions", "mock", nil, 0, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer d.DeleteTask(task.ID)
+	id := strconv.FormatInt(task.ID, 10)
+	for _, entry := range []struct{ kind, value string }{{"subdomain", "api.example.com"}, {"cidr", "10.24.0.0/16"}} {
+		if _, e = d.Assets().AddAgentScope(task.ID, entry.kind, entry.value, "manual", "manual"); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if _, e = d.Assets().CreateTaskInterceptRule(task.ID, "block", "exact_url", "https://api.example.com/admin", "excluded", true); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = d.Assets().CreateTaskInterceptRule(task.ID, "block", "exact_ip", "10.24.1.9", "excluded", true); e != nil {
+		t.Fatal(e)
+	}
+	for _, raw := range []string{"https://API.EXAMPLE.COM:443/a/../admin#fragment", "10.24.0.0/16"} {
+		target, e := ParseTarget(raw)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = d.CheckTaskTarget(t.Context(), id, target); e == nil {
+			t.Fatalf("exclusion bypassed: %s", raw)
+		}
+	}
+}

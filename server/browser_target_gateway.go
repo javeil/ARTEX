@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept"
@@ -22,9 +23,16 @@ func browserTargetGateway(ctx context.Context, m *db.MCPServer) (*db.MCPServer, 
 	}
 	clone := *m
 	args := jsonStrSlice(m.Args)
+	known := strings.Contains(strings.Join(args, " "), "@playwright/mcp") || filepath.Base(m.Command) == "playwright-mcp"
+	if !known {
+		return nil, nil, fmt.Errorf("browser MCP 尚未提供可验证的 Playwright 目标网关适配")
+	}
 	kept := []string{}
 	config := map[string]any{}
 	for j := 0; j < len(args); j++ {
+		if strings.HasPrefix(args[j], "--proxy-server=") || strings.HasPrefix(args[j], "--proxy-bypass=") {
+			continue
+		}
 		switch args[j] {
 		case "--config":
 			if j+1 >= len(args) {
@@ -66,6 +74,16 @@ func browserTargetGateway(ctx context.Context, m *db.MCPServer) (*db.MCPServer, 
 	}
 	options["ignoreHTTPSErrors"] = true
 	browser["contextOptions"] = options
+	launch, _ := browser["launchOptions"].(map[string]any)
+	if launch == nil {
+		launch = map[string]any{}
+	}
+	launchArgs := []any{}
+	if old, ok := launch["args"].([]any); ok {
+		launchArgs = append(launchArgs, old...)
+	}
+	launch["args"] = append(launchArgs, "--disable-quic", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
+	browser["launchOptions"] = launch
 	config["browser"] = browser
 	dir, e := os.MkdirTemp("", "artex-browser-target-")
 	if e != nil {

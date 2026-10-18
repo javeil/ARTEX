@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -44,7 +45,8 @@ func (i *Interceptor) PrepareShellInput(ctx context.Context, tool string, input 
 		if !ok || len(c.Args) == 0 {
 			return true
 		}
-		name, known := operationWord(c.Args[0])
+		originalName, known := operationWord(c.Args[0])
+		name := originalName
 		if !known {
 			return true
 		}
@@ -52,6 +54,24 @@ func (i *Interceptor) PrepareShellInput(ctx context.Context, tool string, input 
 		if name != "curl" && name != "wget" {
 			return true
 		}
+		trustedPath, e := exec.LookPath(name)
+		if e != nil {
+			problem = e
+			return false
+		}
+		trustedPath, e = filepath.EvalSymlinks(trustedPath)
+		if e != nil {
+			problem = e
+			return false
+		}
+		if strings.Contains(originalName, "/") {
+			provided, e := filepath.EvalSymlinks(originalName)
+			if e != nil || provided != trustedPath {
+				problem = fmt.Errorf("HTTP 客户端路径不是已知客户端，不能作为受控工具执行")
+				return false
+			}
+		}
+		c.Args[0] = shellLiteral(trustedPath)
 		for _, w := range c.Args[1:] {
 			arg, known := operationWord(w)
 			if !known {

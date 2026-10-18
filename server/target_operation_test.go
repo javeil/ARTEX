@@ -31,8 +31,11 @@ func TestHumanReadonlyConstraintCannotBeOverriddenByAllowRule(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = pg.Exploration(task.ExplorationID).AddConstraint("deny", "仅允许只读验证，禁止修改目标既有业务订单", "human")
+	constraintID, e := pg.Exploration(task.ExplorationID).AddConstraint("deny", "仅允许只读验证，禁止修改目标既有业务订单", "human")
 	if e != nil {
+		t.Fatal(e)
+	}
+	if e = pg.SaveTargetPolicy(t.Context(), strconv.FormatInt(task.ID, 10), db.TargetPolicy{ConstraintAcknowledgements: map[string]string{strconv.FormatInt(constraintID, 10): db.HumanConstraintDigest("仅允许只读验证，禁止修改目标既有业务订单")}}); e != nil {
 		t.Fatal(e)
 	}
 	rule, e := pg.CreateInterceptRule("cannot override task policy", "tool_name", "string", "Bash", "allow", "", 99999, true, false, 0, "deny")
@@ -69,5 +72,36 @@ func TestHumanReadonlyConstraintCannotBeOverriddenByAllowRule(t *testing.T) {
 	_, _ = ic.Judge(ctx, "WebFetch", []byte(`{"url":"https://example.com/api"}`))
 	if received == nil || received.Policy.Mode != "read_only" || len(received.HumanConstraints) != 1 {
 		t.Fatalf("trusted constraints missing: %+v", received)
+	}
+}
+
+func TestUnconfirmedHumanConstraintBlocksEvenOrdinaryRequests(t *testing.T) {
+	dsn := os.Getenv("ARTEX_PG_DSN")
+	if dsn == "" {
+		t.Skip("isolated PG required")
+	}
+	pg, e := db.Open(dsn)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pg.Close()
+	task, e := pg.CreateTask("unconfirmed operator restriction", "mock", nil, 0, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pg.DeleteTask(task.ID)
+	_, e = pg.Assets().AddAgentScope(task.ID, "subdomain", "example.com", "manual", "manual")
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = pg.Exploration(task.ExplorationID).AddConstraint("deny", "不得测试生产管理接口，需保留审批流程", "human")
+	if e != nil {
+		t.Fatal(e)
+	}
+	ic := intercept.New(pg)
+	ctx := ic.WithScope(intercept.WithTaskContext(t.Context(), strconv.FormatInt(task.ID, 10), "test", nil))
+	decision, gated := ic.ScopeDecision(ctx, "WebFetch", []byte(`{"url":"https://example.com/admin"}`))
+	if !gated || decision.Action != "deny" {
+		t.Fatal("free-text operator restriction silently ignored")
 	}
 }

@@ -159,8 +159,14 @@ func webFetchRunner(cfg WebFetchConfig) func(context.Context, json.RawMessage, *
 		if err != nil {
 			return tool.Errorf("Error fetching URL: " + err.Error()), nil
 		}
-		defer resp.Body.Close()
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxFetchBytes))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxFetchBytes))
+		closeErr := resp.Body.Close()
+		if readErr == nil {
+			readErr = closeErr
+		}
+		if readErr != nil {
+			return tool.Errorf("目标响应读取/审计失败: " + readErr.Error()), nil
+		}
 
 		header := fmt.Sprintf("[%d %s] %s\n", resp.StatusCode, http.StatusText(resp.StatusCode), in.URL)
 		// Cheap fingerprint signal that HTML→Markdown would otherwise hide.

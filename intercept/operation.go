@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Autumn-27/artex/db"
@@ -22,17 +23,26 @@ type Operation struct {
 	Effect       string    `json:"effect"`
 	Account      string    `json:"account,omitempty"`
 }
+type ConstraintConfirmation struct {
+	ID     int64  `json:"id"`
+	Text   string `json:"text"`
+	Digest string `json:"digest"`
+}
 type TrustedPolicy struct {
-	TaskID           string          `json:"task_id"`
-	Version          string          `json:"version"`
-	Policy           db.TargetPolicy `json:"policy"`
-	HumanConstraints []string        `json:"human_constraints,omitempty"`
+	Unconfirmed      []ConstraintConfirmation `json:"unconfirmed_constraints,omitempty"`
+	HumanPorts       []int                    `json:"human_ports,omitempty"`
+	TaskID           string                   `json:"task_id"`
+	Version          string                   `json:"version"`
+	Policy           db.TargetPolicy          `json:"policy"`
+	HumanConstraints []string                 `json:"human_constraints,omitempty"`
 }
 
 var authPath = regexp.MustCompile(`(?i)(?:^|/)(?:login|signin|sign-in|authenticate|auth|token)(?:/|$)`)
 var mutationPath = regexp.MustCompile(`(?i)(?:^|/)(?:delete|remove|cancel|erase|wipe|reset|destroy|truncate|drop)[-_a-z]*(?:/|$)`)
 var mutationValue = regexp.MustCompile(`(?i)^(?:delete|remove|cancel|erase|wipe|reset|destroy|update|disable|enable|refund|transfer|set_balance|set_stock)$`)
 var humanReadOnly = regexp.MustCompile(`(?i)(?:仅|只)(?:允许)?只读|read[- ]only|禁止(?:任何)?写操作`)
+var humanNoAuthentication = regexp.MustCompile(`(?i)禁止.*(?:爆破|喷洒|口令测试|登录尝试)|no (?:password|login) (?:spray|attempt|brute)`)
+var humanPortPrefix = regexp.MustCompile(`(?i)(?:只|仅)(?:允许)?(?:测试|扫描|访问|测)?(?:端口|port)\s*[:：]?\s*([0-9]+(?:\s*[,，]\s*[0-9]+)*)`)
 var humanPassive = regexp.MustCompile(`(?i)(?:仅|只)(?:允许)?被动|passive[- ]only`)
 
 func classifyOperation(o Operation) string {
@@ -43,6 +53,13 @@ func classifyOperation(o Operation) string {
 	if o.Target.URL != "" {
 		if u, e := url.Parse(o.Target.URL); e == nil {
 			for k, v := range u.Query() {
+				if k == "action" || k == "operation" || k == "op" || k == "cmd" {
+					for _, value := range v {
+						if mutationValue.MatchString(value) {
+							return "business_write"
+						}
+					}
+				}
 				if len(v) > 0 {
 					values[strings.ToLower(k)] = v[0]
 				}
@@ -58,6 +75,13 @@ func classifyOperation(o Operation) string {
 		}
 	} else if q, e := url.ParseQuery(o.Body); e == nil {
 		for k, v := range q {
+			if k == "action" || k == "operation" || k == "op" || k == "cmd" {
+				for _, value := range v {
+					if mutationValue.MatchString(value) {
+						return "business_write"
+					}
+				}
+			}
 			if len(v) > 0 {
 				values[strings.ToLower(k)] = v[0]
 			}
@@ -109,7 +133,7 @@ func DescribeOperations(tool string, input []byte) []Operation {
 		Text    string `json:"text"`
 	}
 	_ = json.Unmarshal(input, &in)
-	if strings.EqualFold(tool, "WebFetch") || tool == "TargetRequest" {
+	if strings.EqualFold(tool, "WebFetch") || tool == "TargetRequest" || tool == "TargetHTTP" {
 		add(in.URL, in.Method, in.Body, "")
 		return out
 	}
@@ -198,25 +222,43 @@ func (i *Interceptor) TrustedTaskPolicy(ctx context.Context) (*TrustedPolicy, er
 	if err != nil {
 		return nil, err
 	}
-	rows, err := i.db.QueryContext(ctx, `SELECT c.text FROM task_constraints c JOIN tasks t ON t.exploration_id=c.exploration_id WHERE t.id::text=$1 AND c.origin='human' AND c.kind='deny' ORDER BY c.id`, id)
+	rows, err := i.db.QueryContext(ctx, `SELECT c.id,c.text FROM task_constraints c JOIN tasks t ON t.exploration_id=c.exploration_id WHERE t.id::text=$1 AND c.origin='human' AND c.kind='deny' ORDER BY c.id`, id)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	constraints := []string{}
+	humanPorts := []int{}
+	unconfirmed := []ConstraintConfirmation{}
 	for rows.Next() {
 		var text string
-		if err := rows.Scan(&text); err != nil {
+		var constraintID int64
+		if err := rows.Scan(&constraintID, &text); err != nil {
 			return nil, err
 		}
 		constraints = append(constraints, text)
+		digest := db.HumanConstraintDigest(text)
+		if p.ConstraintAcknowledgements[strconv.FormatInt(constraintID, 10)] != digest {
+			unconfirmed = append(unconfirmed, ConstraintConfirmation{ID: constraintID, Text: text, Digest: digest})
+		}
+		if humanNoAuthentication.MatchString(text) {
+			p.DeniedEffects = append(p.DeniedEffects, "authenticate")
+		}
+		if match := humanPortPrefix.FindStringSubmatch(text); len(match) > 1 {
+			for _, raw := range strings.Split(strings.ReplaceAll(match[1], "，", ","), ",") {
+				n, e := strconv.Atoi(strings.TrimSpace(raw))
+				if e == nil && n > 0 && n <= 65535 {
+					humanPorts = append(humanPorts, n)
+				}
+			}
+		}
 		if humanPassive.MatchString(text) {
 			p.Mode = "passive"
 		} else if humanReadOnly.MatchString(text) && p.Mode != "passive" {
 			p.Mode = "read_only"
 		}
 	}
-	return &TrustedPolicy{TaskID: id, Version: version, Policy: p, HumanConstraints: constraints}, rows.Err()
+	return &TrustedPolicy{TaskID: id, Version: version, Policy: p, HumanConstraints: constraints, HumanPorts: humanPorts, Unconfirmed: unconfirmed}, rows.Err()
 }
 func effectiveOperation(p db.TargetPolicy, o Operation) Operation {
 	// User bindings can identify an otherwise ambiguous operation. Explicit
@@ -283,9 +325,10 @@ func (i *Interceptor) OperationDecision(ctx context.Context, tool string, input 
 	}
 	if uncertain != "" {
 		if dec, judged := i.Judge(ctx, tool, input); judged {
+			dec.AuthorizationVersion = policy.Version
 			return dec, true
 		}
-		return Decision{Action: "ask", Message: uncertain, TimeoutEnabled: true, TimeoutSeconds: 300, TimeoutAction: "deny"}, true
+		return Decision{AuthorizationVersion: policy.Version, Action: "ask", Message: uncertain, TimeoutEnabled: true, TimeoutSeconds: 300, TimeoutAction: "deny"}, true
 	}
 	return Decision{}, false
 }

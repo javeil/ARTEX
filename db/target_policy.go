@@ -95,14 +95,15 @@ type TargetBudget struct {
 // Missing target restrictions retain legacy manually granted hosts, never grant
 // new hosts. An explicit target list narrows those grants.
 type TargetPolicy struct {
-	Mode          string          `json:"mode"` // standard|read_only|passive
-	Targets       []TargetSpec    `json:"targets,omitempty"`
-	DeniedEffects []string        `json:"denied_effects,omitempty"`
-	Accounts      []string        `json:"accounts,omitempty"`
-	Operations    []OperationRule `json:"operations,omitempty"`
-	Budget        TargetBudget    `json:"budget"`
-	StartsAt      *time.Time      `json:"starts_at,omitempty"`
-	ExpiresAt     *time.Time      `json:"expires_at,omitempty"`
+	ConstraintAcknowledgements map[string]string `json:"constraint_acknowledgements,omitempty"`
+	Mode                       string            `json:"mode"` // standard|read_only|passive
+	Targets                    []TargetSpec      `json:"targets,omitempty"`
+	DeniedEffects              []string          `json:"denied_effects,omitempty"`
+	Accounts                   []string          `json:"accounts,omitempty"`
+	Operations                 []OperationRule   `json:"operations,omitempty"`
+	Budget                     TargetBudget      `json:"budget"`
+	StartsAt                   *time.Time        `json:"starts_at,omitempty"`
+	ExpiresAt                  *time.Time        `json:"expires_at,omitempty"`
 }
 
 func (p TargetPolicy) Validate() error {
@@ -115,6 +116,9 @@ func (p TargetPolicy) Validate() error {
 		return fmt.Errorf("策略条目过多")
 	}
 	validateSpec := func(s TargetSpec) error {
+		if _, _, e := net.SplitHostPort(s.Host); e == nil {
+			return fmt.Errorf("target.host 不包含端口，请使用 ports 字段")
+		}
 		if NormalizeScopeHost(s.Host) == "" || strings.Contains(s.Host, "://") {
 			return fmt.Errorf("target.host 必须是域名/IP/CIDR")
 		}
@@ -334,6 +338,25 @@ func (d *DB) CheckTaskTarget(ctx context.Context, id string, t Target) error {
 		return err
 	}
 	block = append(block, tb...)
+	if network, e := netip.ParsePrefix(t.Host); e == nil {
+		for _, r := range block {
+			if !r.Enabled {
+				continue
+			}
+			switch r.Kind {
+			case "exact_ip":
+				if ip, e := netip.ParseAddr(r.Pattern); e == nil && network.Contains(ip) {
+					return fmt.Errorf("扫描范围包含禁止访问的 IP")
+				}
+			case "cidr":
+				if excluded, e := netip.ParsePrefix(r.Pattern); e == nil && (network.Contains(excluded.Masked().Addr()) || excluded.Contains(network.Masked().Addr())) {
+					return fmt.Errorf("扫描范围与禁止网段重叠")
+				}
+			case "fuzzy_ip":
+				return fmt.Errorf("无法证明网段扫描不命中模糊 IP 排除，请提供明确目标列表")
+			}
+		}
+	}
 	domains, ips, urls := []string{}, []string{}, []string{}
 	if net.ParseIP(t.Host) != nil {
 		ips = append(ips, t.Host)
@@ -342,6 +365,25 @@ func (d *DB) CheckTaskTarget(ctx context.Context, id string, t Target) error {
 	}
 	if t.URL != "" {
 		urls = append(urls, t.URL)
+	}
+	for j := range block {
+		if block[j].Kind == "exact_url" {
+			block[j].Pattern = CanonicalTargetURL(block[j].Pattern)
+		}
+		if block[j].Kind == "exact_ip" {
+			block[j].Pattern = NormalizeScopeHost(block[j].Pattern)
+		}
+	}
+	for j := range allow {
+		if allow[j].Kind == "exact_url" {
+			allow[j].Pattern = CanonicalTargetURL(allow[j].Pattern)
+		}
+		if allow[j].Kind == "exact_ip" {
+			allow[j].Pattern = NormalizeScopeHost(allow[j].Pattern)
+		}
+	}
+	for j := range urls {
+		urls[j] = CanonicalTargetURL(urls[j])
 	}
 	if decision := EvaluateAssetGate(block, allow, domains, ips, urls); !decision.Allowed {
 		return fmt.Errorf("禁止访问目标：%s", decision.Reason)
@@ -394,4 +436,31 @@ func (d *DB) CheckTaskExecution(ctx context.Context, id string) error {
 		return fmt.Errorf("不在任务授权时间窗口")
 	}
 	return nil
+}
+
+func HumanConstraintDigest(text string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(text))) }
+
+func CanonicalTargetURL(raw string) string {
+	u, e := url.Parse(raw)
+	if e != nil || u.Hostname() == "" {
+		return raw
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	host := NormalizeScopeHost(u.Hostname())
+	port := u.Port()
+	if (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443") {
+		port = ""
+	}
+	if port != "" {
+		u.Host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		u.Host = "[" + host + "]"
+	} else {
+		u.Host = host
+	}
+	u.Fragment = ""
+	u.RawPath = ""
+	u.Path = path.Clean("/" + strings.TrimPrefix(u.Path, "/"))
+	u.RawQuery = u.Query().Encode()
+	return u.String()
 }

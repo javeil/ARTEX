@@ -7,6 +7,16 @@ import (
 )
 
 func newScopedSession(opts agentcore.Options) *agentcore.Session {
+	if opts.Tools == nil {
+		opts.Tools = tool.DefaultTools()
+	}
+	enableTargetHTTP := opts.EnableWebFetch
+	for _, t := range opts.Tools {
+		enableTargetHTTP = enableTargetHTTP || t.Name() == "Bash"
+	}
+	if enableTargetHTTP {
+		opts.Tools = append(opts.Tools, targetHTTPTool())
+	}
 	if opts.EnableWebFetch {
 		if opts.Tools == nil {
 			opts.Tools = tool.DefaultTools()

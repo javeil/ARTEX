@@ -468,8 +468,14 @@ func (s *Server) runHTTPTool(ctx context.Context, execRaw json.RawMessage, param
 	if err != nil {
 		return actool.Errorf("请求失败: " + err.Error()), nil
 	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	closeErr := resp.Body.Close()
+	if readErr == nil {
+		readErr = closeErr
+	}
+	if readErr != nil {
+		return actool.Errorf("目标响应读取/审计失败: " + readErr.Error()), nil
+	}
 	out := map[string]any{"status": resp.StatusCode, "body": string(respBody)}
 	b, _ := json.Marshal(out)
 	return actool.Text(actool.Capture(tc, string(b))), nil

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/Autumn-27/artex/db"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,13 +29,12 @@ func operationDigest(o Operation) string {
 	b, _ := json.Marshal(struct{ URL, Method, Body string }{o.Target.URL, o.Method, o.Body})
 	return digestInput(b)
 }
-func (i *Interceptor) GrantOperations(ctx context.Context, tool string, input []byte) {
+func (i *Interceptor) GrantOperations(ctx context.Context, tool string, input []byte, version string) {
 	tickets, _ := ctx.Value(ticketKey{}).(*operationTickets)
 	if tickets == nil {
 		return
 	}
-	version, err := i.db.AuthorizationVersion(ctx, TaskIDFromContext(ctx))
-	if err != nil {
+	if version == "" {
 		return
 	}
 	tickets.mu.Lock()
@@ -125,6 +125,10 @@ func (i *Interceptor) AuthorizeRequest(ctx context.Context, req *http.Request) (
 	}
 	o = i.ownedOperation(ctx, o)
 	o = effectiveOperation(policy.Policy, o)
+	requestInput, _ := json.Marshal(map[string]string{"url": o.Target.URL, "method": o.Method, "body": o.Body})
+	if rule, matched := i.MatchContext(ctx, "TargetRequest", requestInput); matched && rule.Action == "deny" {
+		return o, fmt.Errorf("目标请求命中拦截规则：%s", rule.Message)
+	}
 	action, reason := operationRestriction(policy.Policy, o)
 	if action == "deny" {
 		return o, fmt.Errorf("目标操作被任务策略拒绝：%s", reason)
@@ -169,7 +173,7 @@ func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response,
 	}
 	leaseCtx, releaseLease, err := i.acquireTargetIO(req.Context(), "http")
 	if err != nil {
-		return nil, err
+		return i.rejectTargetRequest(req, err)
 	}
 	req = req.Clone(leaseCtx)
 	deadlineCancel := func() {}
@@ -177,23 +181,39 @@ func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response,
 	op, err := i.AuthorizeRequest(req.Context(), req)
 	if err != nil {
 		release()
-		return nil, err
+		return i.rejectTargetRequest(req, err)
 	}
 	p, err := i.db.LoadTargetPolicy(req.Context(), TaskIDFromContext(req.Context()))
 	if err != nil {
 		release()
-		return nil, err
+		return i.rejectTargetRequest(req, err)
+	}
+	if op.Effect == "authenticate" && p.Budget.AccountAttempts == 0 {
+		shared, e := i.db.TargetHasAccountBudget(req.Context(), op.Target.ServiceKey())
+		if e != nil {
+			release()
+			return nil, e
+		}
+		if shared {
+			p.Budget.AccountAttempts = 1
+		}
 	}
 	account, err := operationAccount(p, op)
 	if err != nil {
 		release()
-		return nil, err
+		return i.rejectTargetRequest(req, err)
 	}
 	op.Account = account
+	persistedPolicy, e := i.db.LoadTargetPolicy(req.Context(), TaskIDFromContext(req.Context()))
+	if e != nil {
+		release()
+		return nil, e
+	}
+	p.Budget = persistedPolicy.Budget
 	var taskDeadline *time.Time
 	if err := i.db.QueryRowContext(leaseCtx, `SELECT deadline_at FROM tasks WHERE id::text=$1`, TaskIDFromContext(leaseCtx)).Scan(&taskDeadline); err != nil {
 		release()
-		return nil, err
+		return i.rejectTargetRequest(req, err)
 	}
 	deadline := p.ExpiresAt
 	if taskDeadline != nil && (deadline == nil || taskDeadline.Before(*deadline)) {
@@ -207,7 +227,7 @@ func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response,
 	id, err := i.db.BeginTargetRequest(req.Context(), TaskIDFromContext(req.Context()), op.Target, op.Method, account, p.Budget)
 	if err != nil {
 		release()
-		return nil, err
+		return i.rejectTargetRequest(req, err)
 	}
 	started := time.Now()
 	resp, err := base.RoundTrip(req)
@@ -284,6 +304,9 @@ func (b *targetResponseBody) Read(p []byte) (int, error) {
 			message = err.Error()
 		}
 		b.finish(message)
+		if b.finishErr != nil {
+			return n, b.finishErr
+		}
 	}
 	return n, err
 }
@@ -312,6 +335,14 @@ func (b *targetResponseBody) finish(message string) {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(b.ctx), 2*time.Second)
 		defer cancel()
 		b.finishErr = b.interceptor.db.FinishTargetRequest(ctx, b.id, b.status, b.latency, message, b.retry, signals...)
+		if b.finishErr != nil {
+			b.interceptor.runtime.mu.Lock()
+			state := b.interceptor.targetStateLocked(TaskIDFromContext(b.ctx))
+			state.blocked = true
+			b.interceptor.runtime.mu.Unlock()
+			b.interceptor.CancelTargetIO(TaskIDFromContext(b.ctx))
+			log.Printf("[target-control] 请求 %d 结果审计失败，目标访问已停止: %v", b.id, b.finishErr)
+		}
 	})
 }
 func (b *targetResponseBody) Close() error {
@@ -325,4 +356,17 @@ func (b *targetResponseBody) Close() error {
 		return b.finishErr
 	}
 	return err
+}
+
+func (i *Interceptor) rejectTargetRequest(req *http.Request, reason error) (*http.Response, error) {
+	target, e := parseRequestTarget(req)
+	if e != nil {
+		return nil, reason
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(req.Context()), 2*time.Second)
+	defer cancel()
+	if e = i.db.RecordDeniedTargetRequest(ctx, TaskIDFromContext(req.Context()), target, req.Method, reason.Error()); e != nil {
+		return nil, fmt.Errorf("目标访问拒绝且审计不可用：%w", e)
+	}
+	return nil, reason
 }

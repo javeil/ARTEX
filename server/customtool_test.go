@@ -3,10 +3,14 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/intercept"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -111,6 +115,30 @@ print("port=" + str(a["port"]))
 // method/url/header/body templates are rendered from params, the request is sent,
 // and the response status+body are returned. No recording proxy → s.m untouched.
 func TestRunHTTPTool(t *testing.T) {
+	dsn := os.Getenv("ARTEX_PG_DSN")
+	if dsn == "" {
+		t.Skip("isolated PG required for target authorization")
+	}
+	pg, e := db.Open(dsn)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pg.Close()
+	task, e := pg.CreateTask("custom HTTP template authorization", "mock only", nil, 0, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pg.DeleteTask(task.ID)
+	_, e = pg.Assets().AddAgentScope(task.ID, "ip", "127.0.0.1", "manual", "manual")
+	if e != nil {
+		t.Fatal(e)
+	}
+	id := strconv.FormatInt(task.ID, 10)
+	if e = pg.SaveTargetPolicy(t.Context(), id, db.TargetPolicy{Operations: []db.OperationRule{{Target: db.TargetSpec{Host: "127.0.0.1", PathPrefixes: []string{"/submit"}}, Methods: []string{"POST"}, Effect: "probe"}}}); e != nil {
+		t.Fatal(e)
+	}
+	ic := intercept.New(pg)
+	ctx := ic.WithScope(intercept.WithTaskContext(t.Context(), id, "test", nil))
 	var gotMethod, gotAuth, gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
@@ -128,7 +156,7 @@ func TestRunHTTPTool(t *testing.T) {
 		"headers": map[string]string{"Authorization": "Bearer {token}"},
 		"body":    `{"flag":"{flag}"}`,
 	})
-	res, err := (&Server{}).runHTTPTool(context.Background(), execRaw,
+	res, err := (&Server{m: &Manager{pg: pg, interceptor: ic}}).runHTTPTool(ctx, execRaw,
 		map[string]any{"flag": "CTF{x}", "token": "sekret"}, nil)
 	if err != nil {
 		t.Fatalf("runHTTPTool: %v", err)

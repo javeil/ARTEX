@@ -18,8 +18,11 @@ func TestScopeUnknownPolicyAndMutationCannotBeAllowRuleBypassed(t *testing.T) {
 		if want == "" {
 			want = "ask"
 		}
-		if !ok || dec.Action != want || dec.TimeoutAction != "deny" {
-			t.Fatalf("action=%s got=%+v", action, dec)
+		if got := i.getSettingChoice("scope_unknown_target_action", "ask", "ask", "deny", "allow"); got != want {
+			t.Fatalf("config=%s want=%s", got, want)
+		}
+		if !ok || dec.Action != "deny" {
+			t.Fatalf("missing task policy must fail closed: %+v", dec)
 		}
 		dec, ok = i.ScopeDecision(ctx, "add_company_scope", []byte(`{}`))
 		if !ok || dec.Action != "ask" {
