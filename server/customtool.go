@@ -345,8 +345,10 @@ func (s *Server) runCommandTool(ctx context.Context, execRaw json.RawMessage, pa
 		ctx, cancel = context.WithTimeout(ctx, timeoutOr(spec.TimeoutMs, 120000))
 		defer cancel()
 	}
-	if blocked, message, _ := s.customToolGuard().Hooks().PreToolUse(ctx, "Bash", bashIn); blocked {
+	if blocked, message, updated := s.customToolGuard().Hooks().PreToolUse(ctx, "Bash", bashIn); blocked {
 		return actool.Errorf(message), nil
+	} else if len(updated) > 0 {
+		bashIn = updated
 	}
 	return actool.NewBash().Call(ctx, bashIn, tc)
 }

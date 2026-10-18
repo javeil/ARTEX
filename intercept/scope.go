@@ -18,7 +18,11 @@ type scopeContextKey struct{}
 
 // WithScope binds the request-time HTTP validator to a task run.
 func (i *Interceptor) WithScope(ctx context.Context) context.Context {
-	return context.WithValue(ctx, scopeContextKey{}, i)
+	ctx = context.WithValue(ctx, scopeContextKey{}, i)
+	if ctx.Value(ticketKey{}) == nil {
+		ctx = context.WithValue(ctx, ticketKey{}, &operationTickets{items: map[string][]operationTicket{}})
+	}
+	return ctx
 }
 func TaskIDFromContext(ctx context.Context) string { id, _ := taskInfoFromCtx(ctx); return id }
 
@@ -66,7 +70,7 @@ func (i *Interceptor) ScopeDecision(ctx context.Context, tool string, input []by
 		return Decision{}, false
 	}
 	hosts, unknown := ScopeTargets(tool, input)
-	if shellFollowsRedirects(tool, input) {
+	if GatewayFromContext(ctx) == nil && shellFollowsRedirects(tool, input) {
 		return Decision{Action: "deny", Message: "Bash 自动重定向无法逐跳确认授权范围，请改用 WebFetch 或关闭重定向"}, true
 	}
 	for _, h := range ScopeTargetDetails(tool, input, hosts) {
@@ -309,7 +313,7 @@ func ScopeTargetDetails(tool string, input []byte, hosts []string) []string {
 	_ = json.Unmarshal(input, &obj)
 	values := []string{}
 	covered := map[string]bool{}
-	if strings.EqualFold(tool, "WebFetch") {
+	if strings.EqualFold(tool, "WebFetch") || tool == "TargetRequest" {
 		var v string
 		_ = json.Unmarshal(obj["url"], &v)
 		values = append(values, v)

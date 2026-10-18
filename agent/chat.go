@@ -120,6 +120,14 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 	// have no tools-table rows, so they always pass through.
 	base := actool.DefaultTools()
 	ctx = WithRunInfo(ctx, RunInfo{SessionID: sessionID})
+	var accessCleanup func()
+	var accessErr error
+	ctx, accessCleanup, accessErr = prepareTargetAccess(ctx, c.proxyAddr, c.proxyCACert)
+	if accessErr != nil {
+		return "", accessErr
+	}
+	defer accessCleanup()
+
 	tools, def, cleanup := AugmentTools(ctx, agentKey, base)
 	defer cleanup()
 
@@ -145,7 +153,7 @@ func (c *ChatAgent) Chat(ctx context.Context, agentKey, sessionID, message strin
 		DeepSeekSearchAPIKey:  ws.DeepSeekAPIKey,
 		DeepSeekSearchModel:   ws.DeepSeekModel,
 		WebSearchProxy:        ws.Proxy,
-		BashEnv:               proxyEnv(c.proxyAddr, c.proxyCACert), // Bash 子命令默认走代理+信任 CA
+		BashEnv:               targetProxyEnv(ctx, c.proxyAddr, c.proxyCACert), // Bash 子命令默认走代理+信任 CA
 		WorkingDir:            sessionWorkDir,
 		MaxTurns:              maxTurns,
 		MaxDuration:           maxDuration,

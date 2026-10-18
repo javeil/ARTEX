@@ -77,6 +77,7 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) (result hook.Resu
 		}
 		g.record(ev.ToolName, action, result.Message, shellguard.Command(ev.ToolName, ev.Input))
 	}()
+	outerTool, outerInput := ev.ToolName, ev.Input
 	tool, input, err := intercept.UnwrapToolCall(ev.ToolName, ev.Input)
 	if err != nil {
 		setAudit(ctx, "scope", "deny", err.Error())
@@ -122,9 +123,26 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) (result hook.Resu
 			if result := g.applyDecision(ctx, ev, dec); result.Decision == "block" {
 				return result
 			}
+			g.interceptor.GrantOperations(ctx, ev.ToolName, ev.Input)
 		}
 	}
-	return g.applyIntercept(ctx, ev)
+	result = g.applyIntercept(ctx, ev)
+	if result.Decision == "block" {
+		return result
+	}
+	if g.interceptor != nil {
+		updated, err := g.interceptor.PrepareShellInput(ctx, ev.ToolName, ev.Input)
+		if err != nil {
+			return g.block(ev.ToolName, systemBlockMessage(err.Error()), cmd)
+		}
+		if len(updated) > 0 {
+			result.UpdatedInput, err = intercept.RewriteForwardedInput(outerTool, outerInput, updated)
+			if err != nil {
+				return g.block(ev.ToolName, systemBlockMessage(err.Error()), cmd)
+			}
+		}
+	}
+	return result
 }
 
 // applyIntercept evaluates user-configured intercept rules against the tool call.

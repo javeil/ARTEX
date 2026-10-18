@@ -467,7 +467,10 @@ func (t scopedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err := check(req.Context(), req.URL.String()); err != nil {
 		return nil, err
 	}
-	return t.base.RoundTrip(req)
+	if t.check != nil {
+		return t.base.RoundTrip(req)
+	}
+	return intercept.TargetRoundTrip(t.base, req)
 }
 
 // ProtectClient applies the same per-hop scope policy to host-defined HTTP tools.
