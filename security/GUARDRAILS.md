@@ -35,3 +35,5 @@ SDK 的 ExecuteExtraTool 转发器会先解包再检查实际工具，避免直�
 目标访问将 task_scope/company_scope、全局资产排除、任务 block/allow 规则合并判定。显式排除优先，规则读取失败拒绝访问；URL、协议和端口保留到检查阶段。GET/PUT `/api/tasks/{id}/target-policy` 管理用户确认的策略：targets 可按 host、schemes、ports、path_prefixes、excluded_path_prefixes 收窄既有人工范围。路径前缀按路径分量匹配，不把 /apiary 视作 /api 子路径。此 API 不向 agent 暴露为工具。
 
 独立聊天的主动测试必须绑定授权任务。创建对话支持 task_id，也可通过 PUT `/api/conversations/{id}/authorization` 修改；运行中拒绝换绑。对话页提供授权任务选择器。无授权的对话仍可分析，但不能主动接触目标。绑定的任务暂停、结束或授权时间到期后，目标访问拒绝。
+
+操作策略 mode 支持 standard/read_only/passive；denied_effects 是不可被普通 allow 规则或 judge 覆盖的任务限制。可信人工只读/被动约束会收窄 mode，其他人工 deny 原文与策略版本作为独立 trusted_task_policy 提供给 judge，agent 参数中的同名声明无效。明确改变业务数据的动作拒绝；副作用不明的写操作在标准模式进入 judge/人工审批，在只读模式拒绝。已知读取、查询、登录验证、SQLi/数据导出等正常技术不会因技术名称而被禁用。operations 可由用户为特定服务路径/方法声明 read/probe/authenticate/artifact_create，不能用泛化 read 声明隐藏参数中明确的业务破坏证据。

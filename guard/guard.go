@@ -116,6 +116,14 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) (result hook.Resu
 			}
 		}
 	}
+	if g.interceptor != nil {
+		if dec, gated := g.interceptor.OperationDecision(ctx, ev.ToolName, ev.Input); gated {
+			setAudit(ctx, "task_policy", dec.Action, dec.Message)
+			if result := g.applyDecision(ctx, ev, dec); result.Decision == "block" {
+				return result
+			}
+		}
+	}
 	return g.applyIntercept(ctx, ev)
 }
 

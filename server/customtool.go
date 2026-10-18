@@ -440,7 +440,7 @@ func (s *Server) runHTTPTool(ctx context.Context, execRaw json.RawMessage, param
 	if strings.TrimSpace(rawURL) == "" {
 		return actool.Errorf("http url 为空"), nil
 	}
-	gateInput, _ := json.Marshal(map[string]string{"url": rawURL, "method": method})
+	gateInput, _ := json.Marshal(map[string]string{"url": rawURL, "method": method, "body": renderTemplate(spec.Body, params, identity)})
 	if blocked, message, _ := s.customToolGuard().Hooks().PreToolUse(ctx, "WebFetch", gateInput); blocked {
 		return actool.Errorf(message), nil
 	}

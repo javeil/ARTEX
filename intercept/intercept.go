@@ -477,6 +477,9 @@ func (i *Interceptor) Judge(ctx context.Context, tool string, arguments json.Raw
 	}
 
 	input, contextErr := BuildReviewInput(cctx, tool, arguments)
+	if contextErr == nil && TaskIDFromContext(ctx) != "" && len(DescribeOperations(tool, arguments)) > 0 {
+		input.TrustedPolicy, contextErr = i.TrustedTaskPolicy(cctx)
+	}
 	cancel() // Capture once; each model attempt gets its own timeout below.
 	cfg.Prompt = EffectiveJudgePrompt(cfg.Prompt)
 	var out Decision
