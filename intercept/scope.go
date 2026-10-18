@@ -104,7 +104,7 @@ func (i *Interceptor) ScopeDecision(ctx context.Context, tool string, input []by
 		}
 	}
 	// HTTP input must be concrete; approvals cannot waive malformed/missing URLs.
-	if strings.EqualFold(tool, "webfetch") && unknown {
+	if (strings.EqualFold(tool, "webfetch") || tool == "TargetHTTP" || tool == "TargetRequest") && unknown {
 		return Decision{Action: "deny", Message: "目标不在本任务授权范围：无法确认 HTTP 目标"}, true
 	}
 	if unknown || len(hosts) > 0 {
@@ -164,7 +164,7 @@ func ScopeTargets(tool string, input []byte) (hosts []string, unknown bool) {
 			seen[v] = true
 		}
 	}
-	if strings.EqualFold(tool, "webfetch") {
+	if strings.EqualFold(tool, "webfetch") || tool == "TargetHTTP" || tool == "TargetRequest" {
 		var raw string
 		_ = json.Unmarshal(in["url"], &raw)
 		u, e := url.Parse(raw)

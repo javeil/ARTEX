@@ -94,7 +94,7 @@ func TestUnconfirmedHumanConstraintBlocksEvenOrdinaryRequests(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = pg.Exploration(task.ExplorationID).AddConstraint("deny", "不得测试生产管理接口，需保留审批流程", "human")
+	constraintID, e := pg.Exploration(task.ExplorationID).AddConstraint("deny", "不得测试生产管理接口，需保留审批流程", "human")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -103,5 +103,53 @@ func TestUnconfirmedHumanConstraintBlocksEvenOrdinaryRequests(t *testing.T) {
 	decision, gated := ic.ScopeDecision(ctx, "WebFetch", []byte(`{"url":"https://example.com/admin"}`))
 	if !gated || decision.Action != "deny" {
 		t.Fatal("free-text operator restriction silently ignored")
+	}
+
+	if e = pg.SaveTargetPolicy(t.Context(), strconv.FormatInt(task.ID, 10), db.TargetPolicy{ConstraintAcknowledgements: map[string]string{strconv.FormatInt(constraintID, 10): db.HumanConstraintDigest("不得测试生产管理接口，需保留审批流程")}, Targets: []db.TargetSpec{{Host: "example.com", ExcludedPathPrefixes: []string{"/admin"}}}}); e != nil {
+		t.Fatal(e)
+	}
+	if e = ic.CheckTarget(ctx, "https://example.com/public"); e != nil {
+		t.Fatal(e)
+	}
+	if e = pg.Exploration(task.ExplorationID).UpdateConstraint(constraintID, "deny", "另加限制：不允许生产登录尝试"); e != nil {
+		t.Fatal(e)
+	}
+	if e = ic.CheckTarget(ctx, "https://example.com/public"); e == nil {
+		t.Fatal("edited human restriction retained stale confirmation")
+	}
+}
+
+func TestStrictTargetBudgetsRejectUnobservedPrograms(t *testing.T) {
+	dsn := os.Getenv("ARTEX_PG_DSN")
+	if dsn == "" {
+		t.Skip("isolated PG required")
+	}
+	pg, e := db.Open(dsn)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pg.Close()
+	task, e := pg.CreateTask("strict observability", "mock", nil, 0, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pg.DeleteTask(task.ID)
+	pg.Assets().AddAgentScope(task.ID, "subdomain", "example.com", "manual", "manual")
+	id := strconv.FormatInt(task.ID, 10)
+	if e = pg.SaveTargetPolicy(t.Context(), id, db.TargetPolicy{Budget: db.TargetBudget{MaxRequests: 2}}); e != nil {
+		t.Fatal(e)
+	}
+	ic := intercept.New(pg)
+	ctx := ic.WithScope(intercept.WithTaskContext(t.Context(), id, "test", nil))
+	for _, cmd := range []string{`python3 scan.py`, `nmap -p443 example.com`, `curl https://example.com/`} {
+		input, _ := json.Marshal(map[string]string{"command": cmd})
+		dec, gated := ic.ScopeDecision(ctx, "Bash", input)
+		if !gated || dec.Action != "deny" {
+			t.Errorf("unobserved budget bypass: %s %+v", cmd, dec)
+		}
+	}
+	dec, gated := ic.ScopeDecision(ctx, "TargetHTTP", []byte(`{"url":"https://example.com/"}`))
+	if gated && dec.Action != "allow" {
+		t.Fatalf("checked HTTP adapter unavailable: %+v", dec)
 	}
 }
