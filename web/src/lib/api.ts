@@ -9,6 +9,11 @@ import { mockHandle } from "@/lib/mock/handler";
 import type {
   ActiveFindingRetest,
   Activity,
+  TargetPolicy,
+  TargetPolicyResponse,
+  TargetControlState,
+  TargetRequestRecord,
+  TargetTestResource,
   Agent,
   AgentDetail,
   AgentTrigger,
@@ -291,6 +296,13 @@ export const api = {
     post<{ ok: boolean }>("/auth/change-password", { old_password: oldPassword, new_password: newPassword }),
 
   // ---- tasks ----
+  targetPolicy: (id: string) => get<TargetPolicyResponse>(`/tasks/${id}/target-policy`),
+  saveTargetPolicy: (id: string, policy: TargetPolicy) => put<TargetPolicyResponse>(`/tasks/${id}/target-policy`, policy),
+  targetControl: (id: string) => get<{ target_io: TargetControlState; task_paused: boolean }>(`/tasks/${id}/target-control`),
+  resumeTargetAccess: (id: string, reason: string) => post(`/tasks/${id}/target-control/resume`, { reason }),
+  resetTargetCooldown: (id: string, target_url: string, reason: string) => post(`/tasks/${id}/target-control/reset-cooldown`, { target_url, reason }),
+  targetRequests: (id: string) => get<{ requests: TargetRequestRecord[] }>(`/tasks/${id}/target-requests?limit=10`),
+  targetResources: (id: string) => get<{ resources: TargetTestResource[] }>(`/tasks/${id}/test-resources`),
   tasks: () =>
     get<{ tasks: Task[]; active: string }>("/tasks").then((r) => ({ tasks: arr(r.tasks), active: r.active ?? "" })),
   task: (id: string) => get<Task>(`/tasks/${encodeURIComponent(id)}`),
