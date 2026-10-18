@@ -164,6 +164,12 @@ func (g *Guard) applyDecision(ctx context.Context, ev hook.Event, dec intercept.
 		g.interceptor.Log(ctx, intercept.ConvIDFromContext(ctx), dec, ev.ToolName, ev.Input, "allowed")
 		return hook.Result{}
 	case "ask":
+		binding, err := g.interceptor.BindApproval(ctx, ev.ToolName, ev.Input)
+		if err != nil {
+			return g.block(ev.ToolName, systemBlockMessage("无法绑定本次审批授权："+err.Error()), "")
+		}
+		dec.AuthorizationVersion = binding.AuthorizationVersion
+		dec.ApprovedCallDigest = binding.CallDigest
 		a, _ := ctx.Value(auditKey{}).(*db.ToolCallAudit)
 		if a != nil {
 			a.EffectiveAction = "pending"
@@ -180,6 +186,9 @@ func (g *Guard) applyDecision(ctx context.Context, ev hook.Event, dec intercept.
 		convID := intercept.ConvIDFromContext(ctx)
 		if !g.interceptor.HandleAsk(ctx, convID, dec, ev.ToolName, ev.Input) {
 			return g.block(ev.ToolName, systemBlockMessage("人工审批未通过（用户拒绝或审批超时）"), "")
+		}
+		if err := g.interceptor.ValidateApproval(ctx, ev.ToolName, ev.Input, binding); err != nil {
+			return g.block(ev.ToolName, systemBlockMessage(err.Error()), "")
 		}
 		if a != nil {
 			a.EffectiveAction = "allow"

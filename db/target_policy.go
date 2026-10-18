@@ -355,3 +355,29 @@ func (d *DB) AuthorizationVersion(ctx context.Context, id string) (string, error
 	}
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(raw))), nil
 }
+
+// CheckTaskExecution also applies to opaque approved programs without a literal
+// target: no pending approval may revive a paused/expired/finished engagement.
+func (d *DB) CheckTaskExecution(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var paused, queued bool
+	var status string
+	var deadline *time.Time
+	if err := d.QueryRowContext(ctx, `SELECT paused,queued,status,deadline_at FROM tasks WHERE id::text=$1 AND archived_at IS NULL`, id).Scan(&paused, &queued, &status, &deadline); err != nil {
+		return err
+	}
+	if paused || queued || IsTerminal(status) || (deadline != nil && !time.Now().Before(*deadline)) {
+		return fmt.Errorf("授权任务已暂停、结束或到期")
+	}
+	p, err := d.LoadTargetPolicy(ctx, id)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	if (p.StartsAt != nil && now.Before(*p.StartsAt)) || (p.ExpiresAt != nil && !now.Before(*p.ExpiresAt)) {
+		return fmt.Errorf("不在任务授权时间窗口")
+	}
+	return nil
+}

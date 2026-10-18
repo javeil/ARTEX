@@ -37,3 +37,5 @@ SDK 的 ExecuteExtraTool 转发器会先解包再检查实际工具，避免直�
 独立聊天的主动测试必须绑定授权任务。创建对话支持 task_id，也可通过 PUT `/api/conversations/{id}/authorization` 修改；运行中拒绝换绑。对话页提供授权任务选择器。无授权的对话仍可分析，但不能主动接触目标。绑定的任务暂停、结束或授权时间到期后，目标访问拒绝。
 
 操作策略 mode 支持 standard/read_only/passive；denied_effects 是不可被普通 allow 规则或 judge 覆盖的任务限制。可信人工只读/被动约束会收窄 mode，其他人工 deny 原文与策略版本作为独立 trusted_task_policy 提供给 judge，agent 参数中的同名声明无效。明确改变业务数据的动作拒绝；副作用不明的写操作在标准模式进入 judge/人工审批，在只读模式拒绝。已知读取、查询、登录验证、SQLi/数据导出等正常技术不会因技术名称而被禁用。operations 可由用户为特定服务路径/方法声明 read/probe/authenticate/artifact_create，不能用泛化 read 声明隐藏参数中明确的业务破坏证据。
+
+人工审批绑定本次参数、脚本快照摘要及授权快照版本，并有 5 分钟有效期。快照包含人工 scope、关联公司范围、排除/允许规则、操作策略、人工约束和任务状态；批准后重新读取并核验，变化或任务到期/暂停即拒绝执行。批准记录保存授权版本与调用摘要。审批并不授予下一次调用，也不授予域外访问权限。

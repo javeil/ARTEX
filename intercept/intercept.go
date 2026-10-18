@@ -289,18 +289,20 @@ func (i *Interceptor) SetEnabledTools(tools []string) error {
 
 // Decision is the outcome of a successful rule match.
 type Decision struct {
-	ModelInput       json.RawMessage
-	ModelInputDigest string
-	ModelFallback    bool
-	RuleName         string
-	ConfigDigest     string
-	ProfileID        int64
-	Action           string // "allow" | "deny" | "ask"
-	Message          string
-	RuleID           int64
-	TimeoutEnabled   bool
-	TimeoutSeconds   int
-	TimeoutAction    string // "deny" | "allow"
+	AuthorizationVersion string
+	ApprovedCallDigest   string
+	ModelInput           json.RawMessage
+	ModelInputDigest     string
+	ModelFallback        bool
+	RuleName             string
+	ConfigDigest         string
+	ProfileID            int64
+	Action               string // "allow" | "deny" | "ask"
+	Message              string
+	RuleID               int64
+	TimeoutEnabled       bool
+	TimeoutSeconds       int
+	TimeoutAction        string // "deny" | "allow"
 }
 
 // --- LLM fallback judge ---

@@ -158,6 +158,7 @@ func auditFor(ctx context.Context, dec Decision, input []byte, status string) *d
 		a = db.InterceptAudit{Correlation: "unavailable", InputDigest: digestInput(input), CapturedAt: time.Now().UTC()}
 	}
 	a.InitialAction, a.InitialReason = dec.Action, dec.Message
+	a.AuthorizationVersion, a.ApprovedCallDigest = dec.AuthorizationVersion, dec.ApprovedCallDigest
 	a.ModelFallback = dec.ModelFallback
 	a.ModelInput, a.ModelInputDigest = dec.ModelInput, dec.ModelInputDigest
 	a.RuleName, a.ConfigDigest, a.ProfileID = dec.RuleName, dec.ConfigDigest, dec.ProfileID
