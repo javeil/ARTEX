@@ -74,3 +74,50 @@ func TestTaskNetworkScopeIncludesOnlyItsLinkedCompany(t *testing.T) {
 		}
 	}
 }
+
+func TestDiscoveredCompanyScopeDoesNotGrantNetworkAuthorization(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	task, err := d.CreateTask("company discovery is not authorization", "test", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	cid, _, err := d.Companies().UpsertCompany("scope-provenance-"+strconv.FormatInt(task.ID, 10), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Companies().DeleteCompany(cid)
+	_, err = d.Assets().AddAgentScope(task.ID, "company", strconv.FormatInt(cid, 10), "human grant", "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, _, invalid, messages := d.Companies().AddDiscoveredScope(cid, []string{"discovered.test"}, "agent discovery")
+	if added != 1 || invalid != 0 || len(messages) > 0 {
+		t.Fatalf("discovery: %d %d %v", added, invalid, messages)
+	}
+	rules, err := d.TaskNetworkScope(t.Context(), strconv.FormatInt(task.ID, 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if NetworkScopeAllows(rules, "discovered.test") {
+		t.Fatal("agent company discovery expanded target authorization")
+	}
+	added, _, _, messages = d.Companies().AddScope(cid, []string{"discovered.test"}, "operator confirmed")
+	if added != 1 || len(messages) > 0 {
+		t.Fatalf("promotion: %d %v", added, messages)
+	}
+	rules, err = d.TaskNetworkScope(t.Context(), strconv.FormatInt(task.ID, 10))
+	if err != nil || !NetworkScopeAllows(rules, "discovered.test") {
+		t.Fatalf("human confirmation failed: %v %v", rules, err)
+	}
+	// A later discovery cannot demote or replace the human grant.
+	d.Companies().AddDiscoveredScope(cid, []string{"discovered.test"}, "rediscovered")
+	rules, err = d.TaskNetworkScope(t.Context(), strconv.FormatInt(task.ID, 10))
+	if err != nil || !NetworkScopeAllows(rules, "discovered.test") {
+		t.Fatal("discovery changed existing human grant")
+	}
+}

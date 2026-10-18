@@ -1609,3 +1609,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_target_resource_active_url ON target_test_r
 CREATE INDEX IF NOT EXISTS idx_target_resources_task ON target_test_resources(task_id,id DESC);
 
 ALTER TABLE target_test_resources ADD COLUMN IF NOT EXISTS conditional_cleanup BOOLEAN NOT NULL DEFAULT false;
+
+-- Keep company attribution discovery separate from operator authorization.
+ALTER TABLE company_scope ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';

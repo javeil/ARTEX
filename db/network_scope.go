@@ -66,7 +66,7 @@ func (d *DB) TaskNetworkScope(ctx context.Context, taskID string) ([]NetworkScop
  UNION ALL
  SELECT cs.kind,COALESCE(cs.domain,''),COALESCE(cs.net::text,'') FROM company_scope cs
  JOIN task_scope ts ON ts.company_id=cs.company_id AND ts.kind='company'
- WHERE ts.task_id::text=$1 AND ts.source='manual' AND cs.kind IN ('domain','ip','cidr')`, taskID)
+ WHERE ts.task_id::text=$1 AND ts.source='manual' AND cs.source='manual' AND cs.kind IN ('domain','ip','cidr')`, taskID)
 	if err != nil {
 		return nil, err
 	}
