@@ -983,6 +983,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/intercept/history/{id}", s.interceptDetail)
 	mux.HandleFunc("GET /api/intercept/history/{id}/execution", s.interceptExecution)
 	mux.HandleFunc("GET /api/intercept/task/{taskID}", s.interceptListTaskItems)
+	mux.HandleFunc("GET /api/intercept/task/{taskID}/calls", s.interceptListTaskCalls)
 	mux.HandleFunc("GET /api/intercept/scope-config", s.interceptScopeConfig)
 	mux.HandleFunc("PUT /api/intercept/scope-config", s.interceptScopeConfig)
 	mux.HandleFunc("GET /api/intercept/tool-config", s.interceptGetToolConfig)

@@ -616,6 +616,41 @@ func (s *Server) interceptExecution(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"conversation_id": target.ConversationID, "task_id": target.TaskID, "session": target.Session, "seq": target.Seq, "items": activityDTOs(target.Items)})
 }
 
+// interceptListTaskCalls returns every PreToolUse invocation, including calls
+// that never entered the approval/rule/judge history. before_id is a keyset cursor.
+func (s *Server) interceptListTaskCalls(w http.ResponseWriter, r *http.Request) {
+	pg := s.pg(w)
+	if pg == nil {
+		return
+	}
+	before, err := strconv.ParseInt(defaultQuery(r, "before_id", "0"), 10, 64)
+	if err != nil || before < 0 {
+		writeErr(w, 400, "before_id 必须为非负整数")
+		return
+	}
+	limit, err := strconv.Atoi(defaultQuery(r, "limit", "100"))
+	if err != nil || limit < 1 || limit > 500 {
+		writeErr(w, 400, "limit 必须在 1 到 500 之间")
+		return
+	}
+	rows, err := pg.ListTaskToolCalls(r.Context(), r.PathValue("taskID"), before, limit)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	var next int64
+	if len(rows) == limit {
+		next = rows[len(rows)-1].ID
+	}
+	writeJSON(w, 200, map[string]any{"calls": rows, "next_before_id": next})
+}
+func defaultQuery(r *http.Request, key, fallback string) string {
+	if v := r.URL.Query().Get(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
 func (s *Server) interceptScopeConfig(w http.ResponseWriter, r *http.Request) {
 	pg := s.pg(w)
 	if pg == nil {

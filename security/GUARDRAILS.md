@@ -22,3 +22,10 @@ Guard 使用 Shell AST 对递归强制删除、系统目录删除、mkfs、dd �
 
 仅对单条、静态、绝对路径的 `rm -rf` 提供例外，所有操作数必须是真实任务根目录的严格子路径；任务根目录本身也不能删除。任务根来自平台运行上下文 `<data>/tasks/<task_id>`（兼容默认 `/app/data/tasks/<task_id>`），不采信工具参数中的工作目录或变量。拒绝相对路径、任意 `..` 分量、符号链接、通配符、变量、复合脚本、重定向、无法访问/解析的目录。不存在的叶子仍检查现有祖先，不能用符号链接祖先逃逸。Guard 和内置递归删除规则共用这一个例外；其他用户规则仍可拒绝或审批。该检查是执行前快照，运行目录须由平台隔离，不能与不可信并发进程共享写权限。
 
+## 全部调用审计
+
+`tool_call_audit` 每次 PreToolUse 保存一行，包括未命中规则、未启用 judge、被移出拦截工具清单的调用。来源为 core/scope/rule/judge/default_allow，保存任务、工具、至多 2048 字符参数摘要、初始 decision 和 effective_action。ask 在等待人工前持久化，同一行在结束时更新；重启遗留的 pending 表示尚未记录最终决策，不能被误读为允许。取消不丢弃审计，写入有独立 2 秒上限，审计失败阻止执行并明确提示。
+
+采用单次小型同步 INSERT（ask 才需 UPDATE），不使用可能在重启/满队列时静默丢失的异步队列或抽样。内存环只缓存运行时视图。按 task_id/id 索引及 keyset 游标查询，`GET /api/intercept/task/{taskID}/calls?limit=100&before_id=...`，每页最多 500 条，记录在任务删除后保留。保留周期应由部署方按审计要求制定；不在请求路径上全表清理。
+
+SDK 的 ExecuteExtraTool 转发器会先解包再检查实际工具，避免直接 CoreTool.Call 跳过钩子。Monitor 视为 Shell；自定义 command/script 在模板渲染后重新过 Guard，自定义 HTTP 在渲染后过 Guard 且每跳 transport 复验。

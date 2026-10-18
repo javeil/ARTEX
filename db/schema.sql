@@ -1550,3 +1550,16 @@ CREATE TABLE IF NOT EXISTS task_schedule_history (
  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_schedule_history ON task_schedule_history(schedule_id,id DESC);
+
+-- Every PreToolUse call, including unmatched and disabled-interceptor calls.
+-- Deliberately no FK to tasks: audit survives task deletion.
+CREATE TABLE IF NOT EXISTS tool_call_audit (
+ id BIGSERIAL PRIMARY KEY,
+ task_id TEXT NOT NULL DEFAULT '', tool_name TEXT NOT NULL,
+ input_summary TEXT NOT NULL,
+ decision TEXT NOT NULL CHECK (decision IN ('allow','ask','deny')),
+ effective_action TEXT NOT NULL CHECK (effective_action IN ('allow','pending','deny')),
+ decision_source TEXT NOT NULL,
+ reason TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_tool_call_audit_task_id ON tool_call_audit(task_id,id DESC);
