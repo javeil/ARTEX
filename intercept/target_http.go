@@ -123,6 +123,7 @@ func (i *Interceptor) AuthorizeRequest(ctx context.Context, req *http.Request) (
 	if err != nil {
 		return o, err
 	}
+	o = i.ownedOperation(ctx, o)
 	o = effectiveOperation(policy.Policy, o)
 	action, reason := operationRestriction(policy.Policy, o)
 	if action == "deny" {
@@ -152,6 +153,9 @@ func (i *Interceptor) AuthorizeRequest(ctx context.Context, req *http.Request) (
 	}
 	if err := i.CheckTarget(ctx, req.URL.String()); err != nil {
 		return o, err
+	}
+	if o.ResourceETag != "" {
+		req.Header.Set("If-Match", o.ResourceETag)
 	}
 	return o, nil
 }
@@ -216,6 +220,17 @@ func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response,
 			return nil, fmt.Errorf("目标请求失败且审计结果写入失败: %w", saveErr)
 		}
 		return nil, err
+	}
+	if resp.Request == nil {
+		resp.Request = req
+	}
+	if observeErr := i.observeTargetResource(req.Context(), op, id, resp); observeErr != nil {
+		resp.Body.Close()
+		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(req.Context()), 2*time.Second)
+		_ = i.db.FinishTargetRequest(finishCtx, id, resp.StatusCode, latency, observeErr.Error(), 0)
+		cancel()
+		release()
+		return nil, observeErr
 	}
 	retry := 0
 	if raw := resp.Header.Get("Retry-After"); raw != "" {

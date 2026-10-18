@@ -984,6 +984,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/intercept/history/{id}/execution", s.interceptExecution)
 	mux.HandleFunc("GET /api/intercept/task/{taskID}", s.interceptListTaskItems)
 	mux.HandleFunc("GET /api/intercept/task/{taskID}/calls", s.interceptListTaskCalls)
+	mux.HandleFunc("GET /api/tasks/{id}/test-resources", s.targetResources)
 	mux.HandleFunc("GET /api/tasks/{id}/target-control", s.targetControl)
 	mux.HandleFunc("POST /api/tasks/{id}/target-control/resume", s.targetControl)
 	mux.HandleFunc("POST /api/tasks/{id}/target-control/reset-cooldown", s.resetTargetSafety)

@@ -36,3 +36,16 @@ func (s *Server) targetRequests(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{"requests": rows, "next_before_id": next})
 }
+
+func (s *Server) targetResources(w http.ResponseWriter, r *http.Request) {
+	pg := s.pg(w)
+	if pg == nil {
+		return
+	}
+	rows, err := pg.ListTargetResources(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"resources": rows})
+}

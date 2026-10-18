@@ -47,3 +47,5 @@ budget 可设置 requests_per_second、max_concurrent、max_requests、account_a
 实际请求及完成状态保存在 target_requests，可用 GET `/api/tasks/{id}/target-requests` 游标分页。429 尊重 Retry-After，账号锁定和连续失败/首响应延迟超限对同一服务设置共享冷却；普通 403/WAF 不触发“靶机损坏”熔断。未结束记录保留为 running，重启不会把缺少完成证据的请求静默当作已结束。
 
 暂停流程先发出任务取消并提交暂停，再撤销该任务的新目标访问，取消 HTTP/审批等待和相关 SDK run，等待请求完成记录及 Session/MCP 清理。只有在途数量归零才确认目标访问已停止，超时明确返回仍在停止，不能把发出 cancel 当作完成。授权时间窗/任务 deadline 也绑定到实际请求 context，取消已在执行的访问。GET `/api/tasks/{id}/target-control` 显示 blocked/stopping/active/stopped；显式恢复和冷却重置要求人工原因并记 target_control_events，普通 agent 工具不能修改这些状态。
+
+测试资源账本只接受程序观察到的创建证据：用户声明的 artifact_create 路由实际返回 201 + Location 后登记关联请求 ID、精确资源 URL 和 ETag。GET `/api/tasks/{id}/test-resources` 可查询，agent 没有自报归属的写工具。自动清理还要求用户确认该端点支持 If-Match（cleanup_if_match=true）、强 ETag、当前策略仍授予清理，以及任务完全一致；执行时强制 If-Match。资源 URL 被其他对象复用时，条件不匹配会阻止删除。缺少身份条件时不自动清理；不能因为名字含 test 或 agent 声称拥有就降低真实业务对象的保护。已清理资源取消其删除权限，其他用户规则仍可拒绝。

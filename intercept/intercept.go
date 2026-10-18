@@ -570,7 +570,14 @@ func (i *Interceptor) MatchContext(ctx context.Context, toolName string, input [
 	if len(rules) == 0 {
 		return Decision{}, false
 	}
+	ownedCleanup := false
+	if TaskIDFromContext(ctx) != "" {
+		ownedCleanup = i.isOwnedCleanupCall(ctx, toolName, input)
+	}
 	for _, r := range rules {
+		if ownedCleanup && (r.Name == "[内置] curl / wget 发送 DELETE 请求" || r.Name == "[内置] Python HTTP 客户端 DELETE（requests/httpx/aiohttp）" || r.Name == "[内置] 脚本中声明 HTTP DELETE 方法（JS/通用）" || r.Name == "[内置] 删除类接口路径") {
+			continue
+		}
 		if r.Name == shellguard.RecursiveRule && shellguard.SafeWorkspaceRemoval(shellguard.Command(toolName, input), TaskWorkspace(ctx)) {
 			continue
 		}

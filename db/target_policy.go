@@ -74,10 +74,11 @@ type TargetSpec struct {
 	ExcludedPathPrefixes []string `json:"excluded_path_prefixes,omitempty"`
 }
 type OperationRule struct {
-	Target       TargetSpec `json:"target"`
-	Methods      []string   `json:"methods"`
-	Effect       string     `json:"effect"` // read|probe|authenticate|artifact_create
-	AccountField string     `json:"account_field,omitempty"`
+	CleanupIfMatch bool       `json:"cleanup_if_match,omitempty"`
+	Target         TargetSpec `json:"target"`
+	Methods        []string   `json:"methods"`
+	Effect         string     `json:"effect"` // read|probe|authenticate|artifact_create
+	AccountField   string     `json:"account_field,omitempty"`
 }
 type TargetBudget struct {
 	RequestsPerSecond    int `json:"requests_per_second,omitempty"`
@@ -166,7 +167,7 @@ func (p TargetPolicy) Validate() error {
 	}
 	for _, e := range p.DeniedEffects {
 		switch e {
-		case "read", "probe", "authenticate", "artifact_create", "artifact_cleanup", "business_write", "account_change", "service_change", "unknown_write":
+		case "read", "probe", "authenticate", "artifact_create", "artifact_cleanup", "artifact_update", "business_write", "account_change", "service_change", "unknown_write":
 		default:
 			return fmt.Errorf("无效 denied_effect %s", e)
 		}
@@ -360,6 +361,7 @@ func (d *DB) AuthorizationVersion(ctx context.Context, id string) (string, error
  'company',(SELECT jsonb_agg(to_jsonb(c) ORDER BY c.id) FROM company_scope c WHERE c.company_id IN (SELECT company_id FROM task_scope WHERE task_id=t.id AND kind='company' AND source='manual')),
  'exclude',(SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id) FROM task_intercept_rules r WHERE r.task_id=t.id),
  'global',(SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id) FROM asset_intercept_rules r),
+ 'resources',(SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id) FROM target_test_resources r WHERE r.task_id=t.id::text),
  'constraints',(SELECT jsonb_agg(to_jsonb(c) ORDER BY c.id) FROM task_constraints c WHERE c.exploration_id=t.exploration_id AND c.origin='human')
  )::text FROM tasks t WHERE t.id::text=$1`, id).Scan(&raw)
 	if err != nil {

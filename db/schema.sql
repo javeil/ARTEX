@@ -1598,3 +1598,14 @@ CREATE TABLE IF NOT EXISTS target_control_events (
  action TEXT NOT NULL, reason TEXT NOT NULL, target_key TEXT NOT NULL DEFAULT '',
  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS target_test_resources (
+ id BIGSERIAL PRIMARY KEY, task_id TEXT NOT NULL, url TEXT NOT NULL,
+ creation_request_id BIGINT NOT NULL REFERENCES target_requests(id),
+ etag TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'active',
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(creation_request_id,url)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_target_resource_active_url ON target_test_resources(url) WHERE state='active';
+CREATE INDEX IF NOT EXISTS idx_target_resources_task ON target_test_resources(task_id,id DESC);
+
+ALTER TABLE target_test_resources ADD COLUMN IF NOT EXISTS conditional_cleanup BOOLEAN NOT NULL DEFAULT false;

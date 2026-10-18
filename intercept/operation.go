@@ -15,11 +15,12 @@ import (
 )
 
 type Operation struct {
-	Target  db.Target `json:"target"`
-	Method  string    `json:"method,omitempty"`
-	Body    string    `json:"body,omitempty"`
-	Effect  string    `json:"effect"`
-	Account string    `json:"account,omitempty"`
+	ResourceETag string    `json:"resource_etag,omitempty"`
+	Target       db.Target `json:"target"`
+	Method       string    `json:"method,omitempty"`
+	Body         string    `json:"body,omitempty"`
+	Effect       string    `json:"effect"`
+	Account      string    `json:"account,omitempty"`
 }
 type TrustedPolicy struct {
 	TaskID           string          `json:"task_id"`
@@ -252,7 +253,7 @@ func operationRestriction(p db.TargetPolicy, o Operation) (string, string) {
 			return "deny", "本任务只读，无法确认该调用不会改动业务状态"
 		}
 		return "ask", "操作的业务副作用不明，需要核对任务授权"
-	case "artifact_create":
+	case "artifact_create", "artifact_cleanup", "artifact_update":
 		if p.Mode == "read_only" {
 			return "deny", "本任务只读，不允许创建测试产物"
 		}
@@ -270,6 +271,7 @@ func (i *Interceptor) OperationDecision(ctx context.Context, tool string, input 
 	}
 	var uncertain string
 	for _, op := range ops {
+		op = i.ownedOperation(ctx, op)
 		op = effectiveOperation(policy.Policy, op)
 		action, reason := operationRestriction(policy.Policy, op)
 		if action == "deny" {
