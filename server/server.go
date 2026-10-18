@@ -984,6 +984,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/intercept/history/{id}/execution", s.interceptExecution)
 	mux.HandleFunc("GET /api/intercept/task/{taskID}", s.interceptListTaskItems)
 	mux.HandleFunc("GET /api/intercept/task/{taskID}/calls", s.interceptListTaskCalls)
+	mux.HandleFunc("GET /api/tasks/{id}/target-control", s.targetControl)
+	mux.HandleFunc("POST /api/tasks/{id}/target-control/resume", s.targetControl)
+	mux.HandleFunc("POST /api/tasks/{id}/target-control/reset-cooldown", s.resetTargetSafety)
 	mux.HandleFunc("GET /api/tasks/{id}/target-requests", s.targetRequests)
 	mux.HandleFunc("GET /api/tasks/{id}/target-policy", s.targetPolicy)
 	mux.HandleFunc("PUT /api/tasks/{id}/target-policy", s.targetPolicy)
@@ -1950,6 +1953,9 @@ func (s *Server) taskScopeAdd(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	if s.m.interceptor != nil {
+		s.m.interceptor.CancelTargetIO(t.ID)
+	}
 	writeJSON(w, 200, ts)
 }
 
@@ -1978,6 +1984,9 @@ func (s *Server) taskScopeDelete(w http.ResponseWriter, r *http.Request) {
 	if !deleted {
 		writeErr(w, 404, "scope row not found")
 		return
+	}
+	if s.m.interceptor != nil {
+		s.m.interceptor.CancelTargetIO(t.ID)
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }

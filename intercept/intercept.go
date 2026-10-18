@@ -124,6 +124,7 @@ type Reviewer func(ctx context.Context, profileID int64, prompt string, input Re
 // Interceptor loads intercept rules from the database and evaluates them on
 // tool calls. It is safe for concurrent use.
 type Interceptor struct {
+	runtime      targetRuntime
 	db           *db.DB
 	mu           sync.RWMutex
 	cached       []compiledRule  // sorted by priority DESC; nil means not loaded yet

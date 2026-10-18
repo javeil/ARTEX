@@ -43,6 +43,9 @@ func (s *Server) targetPolicy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if r.Method == http.MethodPut && s.m.interceptor != nil {
+		s.m.interceptor.CancelTargetIO(id)
+	}
 	p, err := pg.LoadTargetPolicy(r.Context(), id)
 	if err != nil {
 		writeErr(w, 500, err.Error())

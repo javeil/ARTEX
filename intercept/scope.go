@@ -70,6 +70,9 @@ func (i *Interceptor) ScopeDecision(ctx context.Context, tool string, input []by
 		return Decision{}, false
 	}
 	hosts, unknown := ScopeTargets(tool, input)
+	if (len(hosts) > 0 || unknown) && i.TargetIOState(TaskIDFromContext(ctx)).Blocked {
+		return Decision{Action: "deny", Message: "目标访问已停止，需用户明确恢复"}, true
+	}
 	if GatewayFromContext(ctx) == nil && shellFollowsRedirects(tool, input) {
 		return Decision{Action: "deny", Message: "Bash 自动重定向无法逐跳确认授权范围，请改用 WebFetch 或关闭重定向"}, true
 	}

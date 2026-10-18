@@ -45,3 +45,5 @@ SDK 的 ExecuteExtraTool 转发器会先解包再检查实际工具，避免直�
 budget 可设置 requests_per_second、max_concurrent、max_requests、account_attempts/account_window_seconds、consecutive_failures、max_latency_ms、cooldown_seconds。0 表示该项未配置上限；部署者按许可与目标承载能力设置，不假设一个通用安全速率。真实 HTTP 请求在发送前通过 PostgreSQL 事务/服务锁预留额度：同一服务跨任务、worker 和实例共享 RPS、并发与账号窗口，累计请求按任务约束。账号范围/预算开启时，无法从真实请求中唯一确认账号则拒绝，不能凭 agent 自报绕过。
 
 实际请求及完成状态保存在 target_requests，可用 GET `/api/tasks/{id}/target-requests` 游标分页。429 尊重 Retry-After，账号锁定和连续失败/首响应延迟超限对同一服务设置共享冷却；普通 403/WAF 不触发“靶机损坏”熔断。未结束记录保留为 running，重启不会把缺少完成证据的请求静默当作已结束。
+
+暂停流程先发出任务取消并提交暂停，再撤销该任务的新目标访问，取消 HTTP/审批等待和相关 SDK run，等待请求完成记录及 Session/MCP 清理。只有在途数量归零才确认目标访问已停止，超时明确返回仍在停止，不能把发出 cancel 当作完成。授权时间窗/任务 deadline 也绑定到实际请求 context，取消已在执行的访问。GET `/api/tasks/{id}/target-control` 显示 blocked/stopping/active/stopped；显式恢复和冷却重置要求人工原因并记 target_control_events，普通 agent 工具不能修改这些状态。

@@ -9,11 +9,16 @@ func prepareTargetAccess(ctx context.Context, upstream, ca string) (context.Cont
 	if intercept.TaskIDFromContext(ctx) == "" || !intercept.HasScopeContext(ctx) {
 		return ctx, func() {}, nil
 	}
-	g, err := intercept.NewTargetGateway(ctx, upstream, ca)
+	ctx, finish, err := intercept.BeginTargetRun(ctx)
 	if err != nil {
 		return ctx, func() {}, err
 	}
-	return intercept.WithGateway(ctx, g), g.Close, nil
+	g, err := intercept.NewTargetGateway(ctx, upstream, ca)
+	if err != nil {
+		finish()
+		return ctx, func() {}, err
+	}
+	return intercept.WithGateway(ctx, g), func() { g.Close(); finish() }, nil
 }
 func targetProxyEnv(ctx context.Context, upstream, ca string) []string {
 	if g := intercept.GatewayFromContext(ctx); g != nil {

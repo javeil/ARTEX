@@ -163,21 +163,46 @@ func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response,
 	if i == nil {
 		return nil, fmt.Errorf("目标访问校验器不可用，必须绑定授权任务")
 	}
+	leaseCtx, releaseLease, err := i.acquireTargetIO(req.Context(), "http")
+	if err != nil {
+		return nil, err
+	}
+	req = req.Clone(leaseCtx)
+	deadlineCancel := func() {}
+	release := func() { releaseLease(); deadlineCancel() }
 	op, err := i.AuthorizeRequest(req.Context(), req)
 	if err != nil {
+		release()
 		return nil, err
 	}
 	p, err := i.db.LoadTargetPolicy(req.Context(), TaskIDFromContext(req.Context()))
 	if err != nil {
+		release()
 		return nil, err
 	}
 	account, err := operationAccount(p, op)
 	if err != nil {
+		release()
 		return nil, err
 	}
 	op.Account = account
+	var taskDeadline *time.Time
+	if err := i.db.QueryRowContext(leaseCtx, `SELECT deadline_at FROM tasks WHERE id::text=$1`, TaskIDFromContext(leaseCtx)).Scan(&taskDeadline); err != nil {
+		release()
+		return nil, err
+	}
+	deadline := p.ExpiresAt
+	if taskDeadline != nil && (deadline == nil || taskDeadline.Before(*deadline)) {
+		deadline = taskDeadline
+	}
+	if deadline != nil {
+		var bound context.Context
+		bound, deadlineCancel = context.WithDeadline(leaseCtx, *deadline)
+		req = req.Clone(bound)
+	}
 	id, err := i.db.BeginTargetRequest(req.Context(), TaskIDFromContext(req.Context()), op.Target, op.Method, account, p.Budget)
 	if err != nil {
+		release()
 		return nil, err
 	}
 	started := time.Now()
@@ -186,6 +211,7 @@ func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response,
 	if err != nil {
 		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(req.Context()), 2*time.Second)
 		defer cancel()
+		defer release()
 		if saveErr := i.db.FinishTargetRequest(finishCtx, id, 0, latency, err.Error(), 0); saveErr != nil {
 			return nil, fmt.Errorf("目标请求失败且审计结果写入失败: %w", saveErr)
 		}
@@ -199,15 +225,21 @@ func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response,
 			retry = int(time.Until(at).Seconds())
 		}
 	}
-	body := &targetResponseBody{ReadCloser: resp.Body, interceptor: i, ctx: req.Context(), id: id, status: resp.StatusCode, latency: latency, retry: retry}
-	resp.Body = body
-	if resp.Header.Get("X-Account-Locked") == "true" {
-		body.locked = true
+	body := &targetResponseBody{ReadCloser: resp.Body, interceptor: i, ctx: req.Context(), id: id, status: resp.StatusCode, latency: latency, retry: retry, release: release}
+	if resp.Body == nil {
+		body.ReadCloser = http.NoBody
 	}
+	body.locked = resp.Header.Get("X-Account-Locked") == "true"
+	body.mu.Lock()
+	body.stopWatch = context.AfterFunc(req.Context(), func() { _ = body.Close() })
+	body.mu.Unlock()
+	resp.Body = body
 	return resp, nil
 }
 
 type targetResponseBody struct {
+	release   func()
+	stopWatch func() bool
 	io.ReadCloser
 	interceptor            *Interceptor
 	ctx                    context.Context
@@ -242,6 +274,15 @@ func (b *targetResponseBody) Read(p []byte) (int, error) {
 }
 func (b *targetResponseBody) finish(message string) {
 	b.once.Do(func() {
+		b.mu.Lock()
+		stopWatch := b.stopWatch
+		b.mu.Unlock()
+		if stopWatch != nil {
+			stopWatch()
+		}
+		if b.release != nil {
+			defer b.release()
+		}
 		b.mu.Lock()
 		prefix := strings.ToLower(string(b.prefix))
 		locked := b.locked

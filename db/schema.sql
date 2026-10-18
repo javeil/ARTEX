@@ -1592,3 +1592,9 @@ CREATE TABLE IF NOT EXISTS target_safety_state (
  target_key TEXT PRIMARY KEY, blocked_until TIMESTAMPTZ,
  consecutive_failures INTEGER NOT NULL DEFAULT 0, reason TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS target_control_events (
+ id BIGSERIAL PRIMARY KEY, task_id TEXT NOT NULL, actor TEXT NOT NULL,
+ action TEXT NOT NULL, reason TEXT NOT NULL, target_key TEXT NOT NULL DEFAULT '',
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
