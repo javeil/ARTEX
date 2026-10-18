@@ -565,6 +565,9 @@ func (i *Interceptor) MatchContext(ctx context.Context, toolName string, input [
 		return Decision{}, false
 	}
 	for _, r := range rules {
+		if r.Name == shellguard.RecursiveRule && shellguard.SafeWorkspaceRemoval(shellguard.Command(toolName, input), TaskWorkspace(ctx)) {
+			continue
+		}
 		if ruleMatches(r, toolName, input) {
 			msg := r.Message
 			if msg == "" {

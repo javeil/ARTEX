@@ -81,7 +81,7 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) hook.Result {
 		cmd = in.Text
 	}
 	g.record(ev.ToolName, "allow", "", cmd)
-	if reason := shellguard.Check(cmd); reason != "" {
+	if reason := shellguard.Check(cmd); reason != "" && !(reason == "递归强制删除" && shellguard.SafeWorkspaceRemoval(cmd, intercept.TaskWorkspace(ctx))) {
 		return g.block(ev.ToolName, systemBlockMessage("核心防护："+reason), cmd)
 	}
 	if hosts, unknown := intercept.ScopeTargets(ev.ToolName, ev.Input); g.interceptor == nil && intercept.TaskIDFromContext(ctx) != "" && (len(hosts) > 0 || unknown) {
@@ -107,7 +107,7 @@ func (g *Guard) applyIntercept(ctx context.Context, ev hook.Event) hook.Result {
 		return hook.Result{}
 	}
 	ctx = intercept.WithCall(ctx, ev.ToolName, ev.Input)
-	dec, matched := g.interceptor.Match(ev.ToolName, ev.Input)
+	dec, matched := g.interceptor.MatchContext(ctx, ev.ToolName, ev.Input)
 	if !matched {
 		// No rule matched. Ask the LLM fallback judge (if enabled); when it is off
 		// or unwired, keep current behavior and allow.
