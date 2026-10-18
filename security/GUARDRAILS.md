@@ -59,3 +59,5 @@ budget 可设置 requests_per_second、max_concurrent、max_requests、account_a
 参考 `security/TARGET_POLICY_EXAMPLE.json`。其中数值仅演示格式，必须按本次测试许可和目标容量调整。policy.targets 只能收窄已经人工授权的 task_scope，不能单独赋予网络权限。未知业务效果不是“目标防御”，返回的 ARTEX 目标管控消息说明拒绝原因。
 
 Playwright 配置使用官方支持的 browser.launchOptions.proxy / browser.contextOptions.proxy，清除更高优先级的代理环境覆盖，拒绝无法应用任务代理的外接 CDP/extension 浏览器；参考 [官方配置结构](https://playwright.dev/mcp/configuration/options)。浏览器能否加载被测页面所依赖的第三方域名取决于这些域名是否明确获授权，不自动把 CDN、回调/OAST 域或跳转域加入范围。
+
+业务效果检查依靠可识别的方法、路径、参数与用户声明的接口用途；它不是目标业务语义的形式证明。存在改变状态的 GET、自定义认证、异步任务等接口时，用户必须配置明确排除/用途，不能仅因 mode=read_only 就假定目标绝无状态变化。平台停止也不能撤回目标端已经接收的异步作业。
