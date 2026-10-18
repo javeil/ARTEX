@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/internal/shellguard"
 )
 
 // ctxKey is the unexported context key type to avoid collisions.
@@ -585,6 +586,9 @@ func (i *Interceptor) MatchContext(ctx context.Context, toolName string, input [
 }
 
 func ruleMatches(r compiledRule, toolName string, input []byte) bool {
+	if r.Protected && r.Name == shellguard.SystemRule {
+		return shellguard.SystemRemoval(toolName, input)
+	}
 	var subject string
 	switch r.MatchTarget {
 	case "tool_name":

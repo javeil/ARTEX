@@ -283,6 +283,9 @@ ON CONFLICT (name) DO NOTHING`,
 	if err := d.seedDefaultInterceptRulesV3(); err != nil {
 		return fmt.Errorf("seed intercept rules v3: %w", err)
 	}
+	if err := d.migrateSystemDirectoryRule(); err != nil {
+		return err
+	}
 	for _, name := range shellguard.CoreNames {
 		if _, err := d.Exec(`UPDATE intercept_rules SET protected=true WHERE name=$1 AND NOT protected`, name); err != nil {
 			return err
@@ -382,7 +385,7 @@ func (d *DB) seedDefaultInterceptRules() error {
 			name:     "[内置] 删除系统关键目录",
 			target:   "tool_input",
 			typ:      "regex",
-			pattern:  `\brm\b[^"'\n]{0,60}["'\s](/|/etc|/bin|/usr|/boot|/var|/lib|/sys|/proc|/dev|/sbin|/root)`,
+			pattern:  systemDirectoryPattern,
 			action:   "deny",
 			message:  "禁止删除系统关键路径",
 			priority: 100,
@@ -623,4 +626,15 @@ WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
 		return fmt.Errorf("rule %q: %w", name, err)
 	}
 	return d.SetSetting("intercept_default_rules_v3", "done")
+}
+
+const legacySystemDirectoryPattern = `\brm\b[^"'\n]{0,60}["'\s](/|/etc|/bin|/usr|/boot|/var|/lib|/sys|/proc|/dev|/sbin|/root)`
+
+// Match only a path in rm's immediate option/operand position, never a later
+// command after a JSON-escaped newline. AST matching additionally checks all operands.
+const systemDirectoryPattern = `\brm\b[ \t]+(?:--?[a-zA-Z-]+[ \t]+)*(?:\\?["'])?/(?:$|\\?["']|[ \t;]|\\n|(?:etc|bin|usr|boot|var|lib|lib64|sys|proc|dev|sbin|root)(?:/|$|\\?["']|[ \t;]|\\n))`
+
+func (d *DB) migrateSystemDirectoryRule() error {
+	_, err := d.Exec(`UPDATE intercept_rules SET pattern=$1 WHERE name=$2 AND pattern=$3`, systemDirectoryPattern, shellguard.SystemRule, legacySystemDirectoryPattern)
+	return err
 }
