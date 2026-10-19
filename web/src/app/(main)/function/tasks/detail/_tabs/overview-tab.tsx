@@ -75,9 +75,9 @@ const SCOPE_KIND_LABELS: Record<TaskScopeRow["kind"], string> = {
 };
 
 const SCOPE_SOURCE_LABELS: Record<TaskScopeRow["source"], string> = {
-  auto: "自动",
-  agent: "Agent",
-  manual: "手动",
+  auto: "自动发现",
+  agent: "Agent 发现",
+  manual: "人工确认",
 };
 
 function StatCard({
@@ -305,6 +305,22 @@ export function OverviewTab({ taskId }: { taskId: string }) {
     }
   };
 
+  const confirmHostScope = async (row: TaskScopeRow) => {
+    if (row.task_id.toString() !== taskId) return;
+    setScopeBusy(true);
+    setScopeErr("");
+    const value = row.kind === "ip" ? (row.net ?? "").split("/")[0] : (row.domain ?? row.net ?? "");
+    try {
+      await api.addTaskScope(taskId, row.kind, value, `用户确认本条单主机授权：${value}`);
+      setScope((rows) => rows.map((item) => (item.id === row.id ? { ...item, source: "manual" } : item)));
+      await loadScope();
+    } catch (e) {
+      setScopeErr(e instanceof Error ? e.message : "确认授权失败");
+    } finally {
+      setScopeBusy(false);
+    }
+  };
+
   const removeScope = async (row: TaskScopeRow) => {
     setScope((prev) => prev.filter((s) => s.id !== row.id));
     try {
@@ -487,7 +503,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
               disabled={goalBusy}
             />
             <Button size="sm" variant="outline" disabled={goalBusy || !goalText.trim()} onClick={() => void addGoal()}>
-              <PlusIcon className="size-3.5" /> 添加
+              <PlusIcon className="size-3.5" /> 添加并确认
             </Button>
             {goalErr && <span className="text-xs text-red-500">{goalErr}</span>}
           </div>
@@ -813,11 +829,23 @@ export function OverviewTab({ taskId }: { taskId: string }) {
           <CardTitle className="flex items-center gap-2 text-base">
             <ShieldCheckIcon className="size-4 text-emerald-500" /> 测试范围
             <span className="text-muted-foreground text-xs font-normal">
-              （覆盖度分母 + 授权边界，共 {scope.length} 条）
+              （发现范围与人工授权，共 {scope.length} 条）
             </span>
           </CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
+          <p className="text-xs text-muted-foreground">
+            Agent/自动发现仅用于覆盖度。网络访问只接受本任务的人工网络授权及所关联企业内的人工授权项；关联任务、ICP
+            和关键词不会授予访问权限。
+          </p>
+          {!scope.some(
+            (row) =>
+              row.task_id.toString() === taskId && row.source === "manual" && !["icp", "keyword"].includes(row.kind),
+          ) && (
+            <p className="text-xs text-amber-600">
+              本任务尚无人工网络授权，主动请求会被阻止。先确认准确目标；反复审批发现范围不能解除拦截。
+            </p>
+          )}
           {/* 新增表单 */}
           <div className="flex flex-wrap items-center gap-2">
             <NativeSelect
@@ -871,8 +899,23 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                   <span className="bg-muted text-muted-foreground shrink-0 rounded px-1.5 py-0.5 text-xs">
                     {SCOPE_KIND_LABELS[row.kind]}
                   </span>
-                  <span className="min-w-0 flex-1 truncate font-mono text-xs">{scopeValue(row)}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs" title={scopeValue(row)}>
+                    {scopeValue(row)}
+                  </span>
                   <span className="text-muted-foreground shrink-0 text-xs">{SCOPE_SOURCE_LABELS[row.source]}</span>
+                  {row.task_id.toString() === taskId &&
+                    row.source !== "manual" &&
+                    (row.kind === "ip" || row.kind === "subdomain") && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 shrink-0 px-1.5"
+                        disabled={scopeBusy}
+                        onClick={() => void confirmHostScope(row)}
+                      >
+                        确认本主机授权
+                      </Button>
+                    )}
                   {row.task_id.toString() === taskId ? (
                     <Button
                       size="sm"
@@ -883,13 +926,13 @@ export function OverviewTab({ taskId }: { taskId: string }) {
                       <Trash2Icon className="size-3.5 text-red-500" />
                     </Button>
                   ) : (
-                    <span className="text-muted-foreground shrink-0 text-xs">继承</span>
+                    <span className="text-muted-foreground shrink-0 text-xs">关联参考，不授予本任务权限</span>
                   )}
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-muted-foreground text-sm">暂无测试范围，添加后可作为资产覆盖度的分母。</p>
+            <p className="text-muted-foreground text-sm">暂无范围；请先添加人工授权的准确目标，再开始主动测试。</p>
           )}
         </CardContent>
       </Card>

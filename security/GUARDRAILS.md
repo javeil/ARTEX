@@ -4,7 +4,7 @@
 
 PreToolUse 在可配置的拦截工具开关和 allow 规则之前验证目标。任务范围只读取本任务 `source=manual` 的网络范围及其人工关联公司的 company_scope；root_domain/domain 包含自身及点分隔的子域，subdomain 精确匹配，IP/CIDR 包含端口归一化并支持 IPv6。ICP、关键词、继承任务、自动发现及 agent 添加的范围仅用于覆盖度，不能作为网络授权。旧任务应在运行前由用户确认并通过范围 API 添加人工授权；空范围和读取失败均拒绝已知目标。
 
-`add_task_scope` / `add_company_scope` 必须人工审批，不能用 allow 规则或工具开关绕过。agent 添加的 task_scope 不直接授予网络权限，用户须通过任务范围 API 确认。agent 新增的公司范围记录 source=agent，只参与资产归属；即使工具审批通过也不自动成为网络授权。用户在公司范围 API 再次提交相同条目才能提升为 manual。公司范围列表返回 source。历史公司范围缺少来源，迁移保留 manual 兼容；升级后应人工复核，不宣称能还原旧数据是谁录入的。
+`add_task_scope` 只登记 agent 来源的发现与覆盖度，不改变网络授权，通常不需要范围审批；仍经过工具权限、用户规则与持久化审计。工具结果明确 registration_only，不能因模型传入 source=manual 就提升来源。`add_company_scope` 涉及全局企业归属，仍须人工审批。agent 添加的 task_scope 不直接授予网络权限，用户须通过任务范围 API 确认。agent 新增的公司范围记录 source=agent，只参与资产归属；即使工具审批通过也不自动成为网络授权。用户在公司范围 API 再次提交相同条目才能提升为 manual。公司范围列表返回 source。历史公司范围缺少来源，迁移保留 manual 兼容；升级后应人工复核，不宣称能还原旧数据是谁录入的。
 
 无法静态确定全部目标的 Bash、交互 Shell、MCP 调用默认 ask；数据库 setting `scope_unknown_target_action`（GET/PUT `/api/intercept/scope-config` 的 `unknown_target_action`）可选 ask/deny/allow。默认 ask 保留 Python、动态脚本及正常渗透工具的能力，同时要求人工确认不能静态证明的网络副作用；缺少审批存储或审批超时则拒绝。选择 allow 是管理员显式接受不透明调用风险，不能覆盖明确的域外目标或 HTTP 参数错误。
 
@@ -92,3 +92,16 @@ Playwright 适配只接受主机 PATH 解析的可信启动器及直接官方包
 ```
 
 接口仅处理本任务明确选定的 1..100 条 running 记录，要求本实例停止状态、任务暂停和原因；事务将其标为 reconciled 并逐条写 target_control_events。结果未知不伪装成成功，累计请求/账号尝试计数保留，不解除目标冷却、不恢复任务。它是可信管理员的核对操作，不授予 agent 自动清扫权限，也不能把另一台实例 active=0 当作所有远端已停止的证明。
+
+
+## 减少无效审批（任务日志反馈修复）
+
+发现登记、人工授权与实际联网分别处理。人工在任务范围 API 确认已经存在的 auto/agent 条目时，现在按完整键只提升该条为 manual，并在同一数据库语句写 authorize_scope 审计；不再被 ON CONFLICT 静默忽略。agent/auto 重复登记不能覆盖人工授权，确认单 IP 不会提升旁边的 CIDR。已有人工作用的重复确认保持幂等。任务总览区分发现/人工来源，并给本任务的精确主机提供确认按钮；广泛网段或整根域仍需用户在表单明确输入，不自动授权。
+
+模型侧 add_task_scope 的旧说明错误地把发现登记描述为扩大授权，现已纠正并返回 registration_only/network_authorization_changed=false。升级只替换之前的代码默认说明，保留自定义说明、工具开关及角色绑定。登记发现不再产生一个无法真正授权的范围审批；访问已知域外目标、不可逆命令、严格策略不可观测执行仍按原有门槛拒绝。
+
+traffic_search/get/blob 的 host、URL 仅为已有记录的查询条件，不是新网络目标。这三个内置工具跳过网络范围门，保留原工具权限、用户规则和审计；不会给 WebFetch、TargetHTTP 或外部 MCP 同名后缀免检。只读本地 sed 仅静态 p/数字行范围，不允许 -i/-f、e/w 或动态程序借用例外，选项放在文件名之后也检查。echo/printf 与已验证只读 sed 中的 URL/IP 可作为数据；混入网络调用或未知程序/管道执行时仍将这些字面量纳入目标检查。显式路径的同名自制二进制不能冒充主机本地工具。
+
+对不透明调用，补充提取常见 Python literal create_connection/connect 与 /dev/tcp、/dev/udp 目的地；明确的域外地址先拒绝，不能靠先人工批准整个未知脚本豁免。没有推断变量值或执行脚本来找目标，无法证明的程序仍受原有 ask/严格策略 deny，不使用全局 unknown=allow 来减少提醒。
+
+对于已绑定目标网关的 HTTP 命令，已知无法执行的动态/代理覆盖参数在请求审批前先校验，直接给出原因，避免用户批准后又被同一硬闸拒绝；不放宽 CLI 参数或网关要求。

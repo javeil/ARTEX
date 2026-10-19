@@ -424,18 +424,11 @@ func (t *ToolSet) addCompanyScope() actool.CoreTool {
 	)
 }
 
-// addTaskScope lets the plan agent add test scope to THE CURRENT TASK — the coverage
-// denominator and the task's authorization edge. Worker discoveries are auto-scoped
-// (precise host) by insertAssets; this tool is for DELIBERATELY WIDENING: pull a whole
-// root domain or whole company into scope, or add a specific subdomain / ip.
+// addTaskScope records discovered coverage. Human network authorization uses
+// the task scope API; a model cannot grant it by adding a source/reason field.
 func (t *ToolSet) addTaskScope() actool.CoreTool {
 	return writeTool(
-		"add_task_scope",
-		"把测试范围加入【本任务】——这是本任务的授权边界，也是资产测试覆盖度的分母。\n"+
-			"kind 支持：company(整个公司名下资产) / root_domain(整个根域，含所有子域) / subdomain(单个精确子域) / ip / cidr / icp / keyword。\n"+
-			"说明：worker 逐个碰到的主机会被系统【自动】加进范围(精确子域)；本工具用于【主动扩大】——把整个根域/整个公司纳入，或补充指定某子域/IP。\n"+
-			"value：company 传公司名或 id(公司须已存在)；root_domain/subdomain 传域名；ip/cidr 传 IP 或网段；icp/keyword 传备案号或企业关键词。\n"+
-			"务必给 reason 说明依据(可审计)。多条用 entries 数组。",
+		"add_task_scope", TaskScopeDiscoveryDescription,
 		obj(map[string]any{
 			"entries": map[string]any{"type": "array", "description": "批量：[{kind, value}]。kind∈company/root_domain/subdomain/ip/cidr/icp/keyword。", "items": map[string]any{"type": "object"}},
 			"kind":    str("[单条] company / root_domain / subdomain / ip / cidr / icp / keyword"),
@@ -473,7 +466,8 @@ func (t *ToolSet) addTaskScope() actool.CoreTool {
 				}
 				added = append(added, map[string]any{"kind": ts.Kind, "domain": ts.Domain, "net": ts.Net, "value": ts.Value, "company_id": ts.CompanyID})
 			}
-			out := map[string]any{"added": added}
+			out := map[string]any{"added": added, "registration_only": true, "network_authorization_changed": false,
+				"note": "仅登记发现与覆盖度；网络访问仍以用户人工确认的范围为准。不要通过扩大网段或重复登记规避拦截。"}
 			if len(errs) > 0 {
 				out["errors"] = errs
 			}

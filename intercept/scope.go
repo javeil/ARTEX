@@ -88,7 +88,7 @@ func (i *Interceptor) ScopeDecision(ctx context.Context, tool string, input []by
 	if tool == "create_mcp" || tool == "update_mcp" || tool == "create_custom_tool" || tool == "update_custom_tool" {
 		return Decision{Action: "ask", Message: "修改可执行工具或 MCP 定义需要人工审批", TimeoutEnabled: true, TimeoutSeconds: 300, TimeoutAction: "deny"}, true
 	}
-	if tool == "add_task_scope" || tool == "add_company_scope" {
+	if tool == "add_company_scope" {
 		return Decision{Action: "ask", Message: "修改授权范围需要人工审批", TimeoutEnabled: true, TimeoutSeconds: 300, TimeoutAction: "deny"}, true
 	}
 	if TaskIDFromContext(ctx) == "" {
@@ -130,6 +130,12 @@ func (i *Interceptor) ScopeDecision(ctx context.Context, tool string, input []by
 		if len(policy.Unconfirmed) > 0 {
 			return Decision{Action: "deny", Message: "人工操作约束尚未确认落实到可执行策略"}, true
 		}
+		// Do not request a human approval for a client argv that the mandatory
+		// gateway rewriter would reject after approval. No command is executed and
+		// no target is contacted by this compatibility check.
+		if _, err := i.PrepareShellInput(ctx, tool, input); err != nil {
+			return Decision{Action: "deny", Message: err.Error()}, true
+		}
 		strict := policy.Policy.Mode != "standard" || len(policy.Policy.Targets) > 0 || len(policy.Policy.DeniedEffects) > 0 || len(policy.Policy.Accounts) > 0 || policy.Policy.Budget != (db.TargetBudget{}) || policy.Policy.StartsAt != nil || policy.Policy.ExpiresAt != nil || len(policy.HumanConstraints) > 0
 		requiresObservation := len(policy.Policy.Accounts) > 0 || policy.Policy.Budget != (db.TargetBudget{})
 		observable := observableHTTPCall(tool, input) || GatewayMCPObservable(ctx, tool)
@@ -162,6 +168,9 @@ func ScopeTargets(tool string, input []byte) (hosts []string, unknown bool) {
 	var in map[string]json.RawMessage
 	if json.Unmarshal(input, &in) != nil {
 		return nil, true
+	}
+	if offlineTrafficTool(tool) {
+		return nil, false
 	}
 	seen := map[string]bool{}
 	add := func(v string) {
@@ -197,6 +206,8 @@ func ScopeTargets(tool string, input []byte) (hosts []string, unknown bool) {
 		surface := shellinput.Read(tool, input)
 		command := surface.Command
 		unknown = surface.Interactive || surface.Err != nil
+		var localDataTargets []string
+		hasNetworkCall := false
 
 		tree, err := syntax.NewParser().Parse(strings.NewReader(command), "scope")
 		if err != nil {
@@ -226,16 +237,45 @@ func ScopeTargets(tool string, input []byte) (hosts []string, unknown bool) {
 			}
 			name := filepath.Base(args[0])
 			network := false
+			local := false
 			switch name {
 			case "curl", "wget", "nmap", "nc", "netcat", "http", "https", "httpx", "nikto", "sqlmap", "ffuf", "gobuster":
 				network = true
+				hasNetworkCall = true
 			case "ls", "pwd", "cat", "head", "tail", "wc", "echo", "printf", "mkdir", "rm", "cp", "mv", "touch", "grep", "rg", "sort", "uniq", "cut", "tr", "true", "false", "test", "[", "cd":
-				// Known local commands. Dynamic arguments still require review.
+				// Only these printing builtins suppress literal data targets. Keep
+				// other utilities' existing extraction; some have execution hooks.
+				local = name == "echo" || name == "printf"
+				if name == "printf" && len(args) > 1 && strings.HasPrefix(args[1], "-v") {
+					local = false
+					unknown = true
+				}
+				for _, a := range args[1:] {
+					if a == "--" {
+						break
+					}
+					option, _, _ := strings.Cut(a, "=")
+					if name == "sort" && len(option) > 2 && strings.HasPrefix(option, "--") && (strings.HasPrefix("--compress-program", option) || strings.HasPrefix(option, "--compress-program")) || name == "rg" && strings.HasPrefix(option, "--pre") || (name == "test" || name == "[") && a == "-v" {
+						unknown = true
+					}
+				}
+			case "sed":
+				local = readOnlySed(args)
+				unknown = unknown || !local
 			default:
+				unknown = true
+			}
+			if local && !trustedLocalExecutable(args[0], name) {
+				local = false
 				unknown = true
 			}
 			found := false
 			for _, arg := range args[1:] {
+				if local {
+					localDataTargets = append(localDataTargets, scopeURL.FindAllString(arg, -1)...)
+					localDataTargets = append(localDataTargets, scopeIP.FindAllString(arg, -1)...)
+					continue
+				}
 				if network {
 					if prefix, e := netip.ParsePrefix(arg); e == nil {
 						add(prefix.Masked().String())
@@ -288,6 +328,16 @@ func ScopeTargets(tool string, input []byte) (hosts []string, unknown bool) {
 		}
 		if command == "" {
 			unknown = true
+		}
+		if unknown || hasNetworkCall {
+			for _, target := range localDataTargets {
+				add(target)
+			}
+		}
+		if unknown {
+			for _, target := range literalSocketTargets(command) {
+				add(target)
+			}
 		}
 	default:
 		// Explicit target-bearing custom/HTTP tools are checked. Opaque MCP/execution

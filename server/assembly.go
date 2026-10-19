@@ -233,6 +233,9 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 			log.Printf("[tools] seed %s 失败: %v", s.Key, err)
 		}
 	}
+	if err := migrateTaskScopeDescription(pg); err != nil {
+		log.Printf("[tools] scope discovery description: %v", err)
+	}
 	// Seed the traffic host tools so they're bindable per-agent like built-ins.
 	// Default binding = worker (preserves prior behavior). Their runtime availability
 	// is still gated by the global capture switch (hostTools() returns them only when
