@@ -225,20 +225,33 @@ func (s TargetSpec) Matches(t Target) bool {
 			return false
 		}
 	}
-	for _, p := range s.ExcludedPathPrefixes {
-		if t.Path == "" || pathWithin(t.Path, p) {
+	if len(s.PathPrefixes) > 0 || len(s.ExcludedPathPrefixes) > 0 {
+		candidates, known := targetPathRepresentations(t)
+		if !known {
 			return false
 		}
-	}
-	if len(s.PathPrefixes) > 0 {
-		ok := false
-		for _, p := range s.PathPrefixes {
-			ok = ok || (t.Path != "" && pathWithin(t.Path, p))
+		matches := func(value, prefix string) bool {
+			prefix = path.Clean(prefix)
+			return prefix == "/" || value == prefix || strings.HasPrefix(value, prefix+"/")
 		}
-		if !ok {
-			return false
+		for _, candidate := range candidates {
+			for _, prefix := range s.ExcludedPathPrefixes {
+				if matches(candidate, prefix) {
+					return false
+				}
+			}
+			if len(s.PathPrefixes) > 0 {
+				allowed := false
+				for _, prefix := range s.PathPrefixes {
+					allowed = allowed || matches(candidate, prefix)
+				}
+				if !allowed {
+					return false
+				}
+			}
 		}
 	}
+
 	return true
 }
 func (d *DB) LoadTargetPolicy(ctx context.Context, id string) (TargetPolicy, error) {

@@ -38,7 +38,11 @@ func targetHTTPTool() tool.CoreTool {
 				return tool.Errorf(e.Error()), nil
 			}
 			for k, v := range in.Headers {
-				request.Header.Set(k, v)
+				if strings.EqualFold(k, "Host") {
+					request.Host = v
+				} else {
+					request.Header.Set(k, v)
+				}
 			}
 			transport := http.DefaultTransport.(*http.Transport).Clone()
 			transport.Proxy = nil

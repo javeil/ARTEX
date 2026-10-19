@@ -45,6 +45,9 @@ func CheckURL(ctx context.Context, raw string) error {
 }
 
 func (i *Interceptor) CheckTarget(ctx context.Context, raw string) error {
+	if i == nil || i.db == nil {
+		return fmt.Errorf("目标授权存储不可用")
+	}
 	target, err := db.ParseTarget(raw)
 	if err != nil {
 		return err
