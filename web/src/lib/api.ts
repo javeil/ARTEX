@@ -9,6 +9,11 @@ import { mockHandle } from "@/lib/mock/handler";
 import type {
   ActiveFindingRetest,
   Activity,
+  TargetPolicy,
+  TargetPolicyResponse,
+  TargetControlState,
+  TargetRequestRecord,
+  TargetTestResource,
   Agent,
   AgentDetail,
   AgentTrigger,
@@ -291,6 +296,13 @@ export const api = {
     post<{ ok: boolean }>("/auth/change-password", { old_password: oldPassword, new_password: newPassword }),
 
   // ---- tasks ----
+  targetPolicy: (id: string) => get<TargetPolicyResponse>(`/tasks/${id}/target-policy`),
+  saveTargetPolicy: (id: string, policy: TargetPolicy) => put<TargetPolicyResponse>(`/tasks/${id}/target-policy`, policy),
+  targetControl: (id: string) => get<{ target_io: TargetControlState; task_paused: boolean }>(`/tasks/${id}/target-control`),
+  resumeTargetAccess: (id: string, reason: string) => post(`/tasks/${id}/target-control/resume`, { reason }),
+  resetTargetCooldown: (id: string, target_url: string, reason: string) => post(`/tasks/${id}/target-control/reset-cooldown`, { target_url, reason }),
+  targetRequests: (id: string) => get<{ requests: TargetRequestRecord[] }>(`/tasks/${id}/target-requests?limit=10`),
+  targetResources: (id: string) => get<{ resources: TargetTestResource[] }>(`/tasks/${id}/test-resources`),
   tasks: () =>
     get<{ tasks: Task[]; active: string }>("/tasks").then((r) => ({ tasks: arr(r.tasks), active: r.active ?? "" })),
   task: (id: string) => get<Task>(`/tasks/${encodeURIComponent(id)}`),
@@ -1112,6 +1124,8 @@ export const api = {
     patch<Conversation>(`/conversations/${id}`, input),
   renameConversation: (id: number, title: string) => patch<Conversation>(`/conversations/${id}`, { title }),
   pinConversation: (id: number, pinned: boolean) => patch<Conversation>(`/conversations/${id}`, { pinned }),
+  bindConversationAuthorization: (id: number, task_id: number | null) =>
+    put<Conversation>(`/conversations/${id}/authorization`, { task_id }),
   updateConversationProfile: (id: number, llm_profile_id: number | null) =>
     patch<{ ok: boolean }>(`/conversations/${id}/profile`, { llm_profile_id }),
   deleteConversation: (id: number) => del<{ deleted: number }>(`/conversations/${id}`),
@@ -1299,8 +1313,8 @@ export const api = {
   updateInterceptRule: (id: number, rule: Omit<InterceptRule, "id" | "created_at" | "updated_at">) =>
     put<InterceptRule>(`/intercept/rules/${id}`, rule),
   deleteInterceptRule: (id: number) => del<{ deleted: number }>(`/intercept/rules/${id}`),
-  toggleInterceptRule: (id: number, enabled: boolean) =>
-    post<{ ok: boolean; enabled: boolean }>(`/intercept/rules/${id}/toggle`, { enabled }),
+  toggleInterceptRule: (id: number, enabled: boolean, reason?: string) =>
+    post<{ ok: boolean; enabled: boolean }>(`/intercept/rules/${id}/toggle`, { enabled, reason }),
 
   // ---- asset intercept rules（资产拦截：全局黑名单） ----
   assetInterceptRules: () => get<{ rules: AssetInterceptRule[] }>("/asset-intercept/rules").then((r) => arr(r.rules)),

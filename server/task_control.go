@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
@@ -15,10 +16,11 @@ import (
 const maxBatchControlIDs = 100
 
 type taskControlResult struct {
-	ID     string `json:"id"`
-	Paused bool   `json:"paused"`
-	Queued bool   `json:"queued"`
-	Status string `json:"status"`
+	ID            string `json:"id"`
+	Paused        bool   `json:"paused"`
+	Queued        bool   `json:"queued"`
+	Status        string `json:"status"`
+	TargetStopped bool   `json:"target_stopped"`
 }
 
 type intentControlResult struct {
@@ -141,12 +143,24 @@ func (s *Server) applyTaskControlWithCause(t *Task, action string, pauseCause er
 		// after the persistent pause commits, so a failed control request is fully
 		// compensated and does not lose an otherwise valid conversation turn.
 		s.cancelTaskChat(t.ID, agent.AbortChatPausedWithTask)
+		if s.m.interceptor != nil {
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			err := s.m.interceptor.StopTargetIO(stopCtx, t.ID)
+			stopCancel()
+			if err != nil {
+				return out, err
+			}
+			out.TargetStopped = true
+		}
 		out.Paused, out.Status = true, "paused"
 		go s.reconcileConcurrency()
 	case "resume":
 		queued, err := s.admitTaskWhenScheduled(t, "resume", true, pauseCause == agent.AbortPausedBySchedule)
 		if err != nil {
 			return out, err
+		}
+		if s.m.interceptor != nil {
+			s.m.interceptor.ResumeTargetIO(t.ID)
 		}
 		out.Queued = queued
 		out.Status = map[bool]string{true: "queued", false: "running"}[queued]

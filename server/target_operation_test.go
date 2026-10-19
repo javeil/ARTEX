@@ -1,0 +1,155 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"strconv"
+	"testing"
+
+	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/guard"
+	"github.com/Autumn-27/artex/intercept"
+)
+
+func TestHumanReadonlyConstraintCannotBeOverriddenByAllowRule(t *testing.T) {
+	dsn := os.Getenv("ARTEX_PG_DSN")
+	if dsn == "" {
+		t.Skip("isolated PG required")
+	}
+	pg, e := db.Open(dsn)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pg.Close()
+	task, e := pg.CreateTask("readonly effect regression", "local mock", nil, 0, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pg.DeleteTask(task.ID)
+	_, e = pg.Assets().AddAgentScope(task.ID, "subdomain", "example.com", "manual", "manual")
+	if e != nil {
+		t.Fatal(e)
+	}
+	constraintID, e := pg.Exploration(task.ExplorationID).AddConstraint("deny", "仅允许只读验证，禁止修改目标既有业务订单", "human")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = pg.SaveTargetPolicy(t.Context(), strconv.FormatInt(task.ID, 10), db.TargetPolicy{ConstraintAcknowledgements: map[string]string{strconv.FormatInt(constraintID, 10): db.HumanConstraintDigest("仅允许只读验证，禁止修改目标既有业务订单")}}); e != nil {
+		t.Fatal(e)
+	}
+	rule, e := pg.CreateInterceptRule("cannot override task policy", "tool_name", "string", "Bash", "allow", "", 99999, true, false, 0, "deny")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pg.DeleteInterceptRule(rule.ID)
+	ic := intercept.New(pg)
+	ctx := ic.WithScope(intercept.WithTaskContext(t.Context(), strconv.FormatInt(task.ID, 10), "test", nil))
+	cmd := `curl -X POST https://example.com/api/action -d '{"action":"cancel","order_id":"mock-1"}'`
+	raw, _ := json.Marshal(map[string]string{"command": cmd})
+	blocked, _, _ := guard.NewWithInterceptor(ic).Hooks().PreToolUse(ctx, "Bash", raw)
+	if !blocked {
+		t.Fatal("business mutation bypassed human policy")
+	}
+	// Normal exploit/read techniques are not globally disabled by the policy.
+	raw, _ = json.Marshal(map[string]string{"command": `sqlmap -u 'https://example.com/?id=1' --dump`})
+	blocked, _, _ = guard.NewWithInterceptor(ic).Hooks().PreToolUse(ctx, "Bash", raw)
+	if blocked {
+		t.Fatal("ordinary data export technique was disabled")
+	}
+	var received *intercept.TrustedPolicy
+	ic.SetReviewer(func(_ context.Context, _ int64, _ string, in intercept.ReviewInput) (intercept.Decision, error) {
+		received = in.TrustedPolicy
+		return intercept.Decision{Action: "allow"}, nil
+	})
+	old := ic.GetJudgeConfig()
+	defer ic.SetJudgeConfig(old)
+	cfg := old
+	cfg.Enabled = true
+	if e := ic.SetJudgeConfig(cfg); e != nil {
+		t.Fatal(e)
+	}
+	_, _ = ic.Judge(ctx, "WebFetch", []byte(`{"url":"https://example.com/api"}`))
+	if received == nil || received.Policy.Mode != "read_only" || len(received.HumanConstraints) != 1 {
+		t.Fatalf("trusted constraints missing: %+v", received)
+	}
+}
+
+func TestUnconfirmedHumanConstraintBlocksEvenOrdinaryRequests(t *testing.T) {
+	dsn := os.Getenv("ARTEX_PG_DSN")
+	if dsn == "" {
+		t.Skip("isolated PG required")
+	}
+	pg, e := db.Open(dsn)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pg.Close()
+	task, e := pg.CreateTask("unconfirmed operator restriction", "mock", nil, 0, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pg.DeleteTask(task.ID)
+	_, e = pg.Assets().AddAgentScope(task.ID, "subdomain", "example.com", "manual", "manual")
+	if e != nil {
+		t.Fatal(e)
+	}
+	constraintID, e := pg.Exploration(task.ExplorationID).AddConstraint("deny", "不得测试生产管理接口，需保留审批流程", "human")
+	if e != nil {
+		t.Fatal(e)
+	}
+	ic := intercept.New(pg)
+	ctx := ic.WithScope(intercept.WithTaskContext(t.Context(), strconv.FormatInt(task.ID, 10), "test", nil))
+	decision, gated := ic.ScopeDecision(ctx, "WebFetch", []byte(`{"url":"https://example.com/admin"}`))
+	if !gated || decision.Action != "deny" {
+		t.Fatal("free-text operator restriction silently ignored")
+	}
+
+	if e = pg.SaveTargetPolicy(t.Context(), strconv.FormatInt(task.ID, 10), db.TargetPolicy{ConstraintAcknowledgements: map[string]string{strconv.FormatInt(constraintID, 10): db.HumanConstraintDigest("不得测试生产管理接口，需保留审批流程")}, Targets: []db.TargetSpec{{Host: "example.com", ExcludedPathPrefixes: []string{"/admin"}}}}); e != nil {
+		t.Fatal(e)
+	}
+	if e = ic.CheckTarget(ctx, "https://example.com/public"); e != nil {
+		t.Fatal(e)
+	}
+	if e = pg.Exploration(task.ExplorationID).UpdateConstraint(constraintID, "deny", "另加限制：不允许生产登录尝试"); e != nil {
+		t.Fatal(e)
+	}
+	if e = ic.CheckTarget(ctx, "https://example.com/public"); e == nil {
+		t.Fatal("edited human restriction retained stale confirmation")
+	}
+}
+
+func TestStrictTargetBudgetsRejectUnobservedPrograms(t *testing.T) {
+	dsn := os.Getenv("ARTEX_PG_DSN")
+	if dsn == "" {
+		t.Skip("isolated PG required")
+	}
+	pg, e := db.Open(dsn)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pg.Close()
+	task, e := pg.CreateTask("strict observability", "mock", nil, 0, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer pg.DeleteTask(task.ID)
+	pg.Assets().AddAgentScope(task.ID, "subdomain", "example.com", "manual", "manual")
+	id := strconv.FormatInt(task.ID, 10)
+	if e = pg.SaveTargetPolicy(t.Context(), id, db.TargetPolicy{Budget: db.TargetBudget{MaxRequests: 2}}); e != nil {
+		t.Fatal(e)
+	}
+	ic := intercept.New(pg)
+	ctx := ic.WithScope(intercept.WithTaskContext(t.Context(), id, "test", nil))
+	for _, cmd := range []string{`python3 scan.py`, `nmap -p443 example.com`, `curl https://example.com/`} {
+		input, _ := json.Marshal(map[string]string{"command": cmd})
+		dec, gated := ic.ScopeDecision(ctx, "Bash", input)
+		if !gated || dec.Action != "deny" {
+			t.Errorf("unobserved budget bypass: %s %+v", cmd, dec)
+		}
+	}
+	dec, gated := ic.ScopeDecision(ctx, "TargetHTTP", []byte(`{"url":"https://example.com/"}`))
+	if gated && dec.Action != "allow" {
+		t.Fatalf("checked HTTP adapter unavailable: %+v", dec)
+	}
+}

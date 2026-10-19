@@ -58,7 +58,7 @@ import { api } from "@/lib/api";
 import { shouldSubmitOnKey, useChatSendMode } from "@/lib/chat-send-mode";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
 import { isBtwCommand } from "@/lib/side-questions";
-import type { Activity, Agent, ChatAttachment, Conversation, LLMProfile } from "@/lib/types";
+import type { Activity, Agent, ChatAttachment, Conversation, LLMProfile, Task } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 // fmtBytes renders a human file size for attachment chips (mirrors transcript.tsx).
@@ -494,6 +494,8 @@ function ChatView({
   onTitleMaybeChanged: () => void;
   onConvUpdated: () => void;
 }) {
+  const [authorizationTasks, setAuthorizationTasks] = React.useState<Task[]>([]);
+  React.useEffect(() => { api.tasks().then((r) => setAuthorizationTasks(r.tasks)).catch(() => {}); }, []);
   const approvalFocus = useApprovalFocus({ conversationId: conv.id });
   const [messages, setMessages] = React.useState<Activity[]>([]);
   const [running, setRunning] = React.useState(false);
@@ -774,6 +776,17 @@ function ChatView({
         {agent?.description && (
           <span className="text-muted-foreground min-w-0 truncate text-xs">{agent.description}</span>
         )}
+        <Select disabled={running} value={conv.task_id ? String(conv.task_id) : "unbound"}
+          onValueChange={async (value) => {
+            try { await api.bindConversationAuthorization(conv.id, value === "unbound" ? null : Number(value)); onConvUpdated(); }
+            catch (e) { toast.error((e as Error).message); }
+          }}>
+          <SelectTrigger className="w-56" aria-label="主动测试授权任务"><SelectValue placeholder="绑定授权任务" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="unbound">未绑定：仅分析，不主动测试</SelectItem>
+            {authorizationTasks.map((t) => <SelectItem key={t.id} value={t.id}>#{t.id} {t.name || t.description.slice(0, 30)}</SelectItem>)}
+          </SelectContent>
+        </Select>
         {running && <LiveBadge />}
         <SideQuestionButton side={side} />
         <div className="text-muted-foreground ml-auto flex min-w-0 max-w-full items-center justify-end gap-x-3 gap-y-1 text-xs max-sm:w-full max-sm:flex-wrap">

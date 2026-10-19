@@ -11,7 +11,7 @@ import (
 
 // 总览「约束管理」的人工 CRUD 接口 + 注入范围开关的解析。操作约束(allow/deny)与 agent 侧的
 // set_constraints 工具写同一张 task_constraints 表;这里是人类在 UI 上直接增删改。约束仅是
-// 提示上下文——增删改后【不】通知 planner,下一轮规划自然读库生效(按产品决策)。每个变更 handler
+// 提示上下文；人工 deny 同时参与目标授权，修改会取消在途目标工作。每个变更 handler
 // 都走 beginTaskOperation/decInflight,避免与任务删除竞态(与目标/意图 CRUD 一致)。
 
 // 注入范围开关的 settings key,默认都开(GetBool 第二参数 = true)。
@@ -81,6 +81,7 @@ func (s *Server) addConstraint(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	s.cancelTargetAuthorization(t.ID)
 	writeJSON(w, 200, ConstraintDTO{ID: strconv.FormatInt(id, 10), Kind: kind, Text: text, Origin: "human"})
 }
 
@@ -124,6 +125,7 @@ func (s *Server) editConstraint(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	s.cancelTargetAuthorization(t.ID)
 	writeJSON(w, 200, ConstraintDTO{ID: strconv.FormatInt(cid, 10), Kind: kind, Text: text})
 }
 
@@ -149,6 +151,7 @@ func (s *Server) deleteConstraint(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	s.cancelTargetAuthorization(t.ID)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 

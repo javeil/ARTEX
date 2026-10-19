@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"github.com/Autumn-27/artex/intercept"
+	"strconv"
 
 	"github.com/Autumn-27/artex/db"
 )
@@ -35,6 +37,9 @@ type runInfoKey struct{}
 
 // WithRunInfo attaches run attribution to ctx.
 func WithRunInfo(ctx context.Context, ri RunInfo) context.Context {
+	if ri.TaskID > 0 && intercept.TaskIDFromContext(ctx) == "" {
+		ctx = intercept.WithTaskContext(ctx, strconv.FormatInt(ri.TaskID, 10), "", nil)
+	}
 	return context.WithValue(ctx, runInfoKey{}, ri)
 }
 

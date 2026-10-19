@@ -983,6 +983,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/intercept/history/{id}", s.interceptDetail)
 	mux.HandleFunc("GET /api/intercept/history/{id}/execution", s.interceptExecution)
 	mux.HandleFunc("GET /api/intercept/task/{taskID}", s.interceptListTaskItems)
+	mux.HandleFunc("GET /api/intercept/task/{taskID}/calls", s.interceptListTaskCalls)
+	mux.HandleFunc("GET /api/tasks/{id}/test-resources", s.targetResources)
+	mux.HandleFunc("GET /api/tasks/{id}/target-control", s.targetControl)
+	mux.HandleFunc("POST /api/tasks/{id}/target-control/resume", s.targetControl)
+	mux.HandleFunc("POST /api/tasks/{id}/target-control/reset-cooldown", s.resetTargetSafety)
+	mux.HandleFunc("GET /api/tasks/{id}/target-requests", s.targetRequests)
+	mux.HandleFunc("GET /api/tasks/{id}/target-policy", s.targetPolicy)
+	mux.HandleFunc("PUT /api/tasks/{id}/target-policy", s.targetPolicy)
+	mux.HandleFunc("PUT /api/conversations/{id}/authorization", s.bindConversationAuthorization)
+	mux.HandleFunc("GET /api/intercept/scope-config", s.interceptScopeConfig)
+	mux.HandleFunc("PUT /api/intercept/scope-config", s.interceptScopeConfig)
 	mux.HandleFunc("GET /api/intercept/tool-config", s.interceptGetToolConfig)
 	mux.HandleFunc("PUT /api/intercept/tool-config", s.interceptSetToolConfig)
 	mux.HandleFunc("GET /api/intercept/judge", s.interceptGetJudgeConfig)
@@ -1943,6 +1954,9 @@ func (s *Server) taskScopeAdd(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	if s.m.interceptor != nil {
+		s.m.interceptor.CancelTargetIO(t.ID)
+	}
 	writeJSON(w, 200, ts)
 }
 
@@ -1971,6 +1985,9 @@ func (s *Server) taskScopeDelete(w http.ResponseWriter, r *http.Request) {
 	if !deleted {
 		writeErr(w, 404, "scope row not found")
 		return
+	}
+	if s.m.interceptor != nil {
+		s.m.interceptor.CancelTargetIO(t.ID)
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
@@ -3799,6 +3816,7 @@ func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, cancel := context.WithCancelCause(s.ctx)
+	ctx = s.m.interceptor.WithScope(ctx)
 	ctx = intercept.WithReviewContext(ctx, "", intercept.ReviewBackground{Source: intercept.BackgroundUserMessage, Text: req.Message})
 	s.chatBusy[t.ID] = true
 	s.chatCancel[t.ID] = cancel

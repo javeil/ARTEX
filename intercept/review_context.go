@@ -37,6 +37,7 @@ type ReviewScript struct {
 // ReviewInput contains only the current call and explicitly selected background.
 // Execution history and call correlation belong to the separate audit record.
 type ReviewInput struct {
+	TrustedPolicy       *TrustedPolicy    `json:"trusted_task_policy,omitempty"`
 	Version             int               `json:"version"`
 	WorkingDir          string            `json:"working_directory,omitempty"`
 	Background          *ReviewBackground `json:"background,omitempty"`

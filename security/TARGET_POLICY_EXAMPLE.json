@@ -1,0 +1,11 @@
+{
+  "mode": "standard",
+  "targets": [{"host": "staging.example.test", "schemes": ["https"], "ports": [443], "path_prefixes": ["/api"], "excluded_path_prefixes": ["/api/production-admin"]}],
+  "operations": [
+    {"target": {"host": "staging.example.test", "path_prefixes": ["/api/search"]}, "methods": ["POST"], "effect": "probe"},
+    {"target": {"host": "staging.example.test", "path_prefixes": ["/api/login"]}, "methods": ["POST"], "effect": "authenticate", "account_field": "username"},
+    {"target": {"host": "staging.example.test", "path_prefixes": ["/api/test-fixtures"]}, "methods": ["POST"], "effect": "artifact_create", "cleanup_if_match": true}
+  ],
+  "accounts": ["pentest-user"],
+  "budget": {"requests_per_second": 5, "max_concurrent": 2, "max_requests": 1000, "account_attempts": 3, "account_window_seconds": 900, "consecutive_failures": 3, "max_latency_ms": 3000, "cooldown_seconds": 300}
+}

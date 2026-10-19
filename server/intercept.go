@@ -133,6 +133,7 @@ func (s *Server) interceptCreateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.m.interceptor.Invalidate()
+	s.cancelTargetAuthorization("")
 	writeJSON(w, 200, rule)
 }
 
@@ -161,6 +162,7 @@ func (s *Server) interceptUpdateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.m.interceptor.Invalidate()
+	s.cancelTargetAuthorization("")
 	writeJSON(w, 200, rule)
 }
 
@@ -175,10 +177,11 @@ func (s *Server) interceptDeleteRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := pg.DeleteInterceptRule(id); err != nil {
-		writeErr(w, 500, err.Error())
+		writeErr(w, 409, err.Error())
 		return
 	}
 	s.m.interceptor.Invalidate()
+	s.cancelTargetAuthorization("")
 	writeJSON(w, 200, map[string]any{"deleted": id})
 }
 
@@ -193,17 +196,19 @@ func (s *Server) interceptToggleRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Enabled bool `json:"enabled"`
+		Enabled bool   `json:"enabled"`
+		Reason  string `json:"reason"`
 	}
 	if err := decode(r, &req); err != nil {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	if err := pg.ToggleInterceptRule(id, req.Enabled); err != nil {
-		writeErr(w, 500, err.Error())
+	if err := pg.ToggleInterceptRule(id, req.Enabled, db.RuleChange{Actor: "ARTEX administrator", Reason: req.Reason}); err != nil {
+		writeErr(w, 400, err.Error())
 		return
 	}
 	s.m.interceptor.Invalidate()
+	s.cancelTargetAuthorization("")
 	writeJSON(w, 200, map[string]any{"ok": true, "enabled": req.Enabled})
 }
 
@@ -613,4 +618,76 @@ func (s *Server) interceptExecution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"conversation_id": target.ConversationID, "task_id": target.TaskID, "session": target.Session, "seq": target.Seq, "items": activityDTOs(target.Items)})
+}
+
+// interceptListTaskCalls returns every PreToolUse invocation, including calls
+// that never entered the approval/rule/judge history. before_id is a keyset cursor.
+func (s *Server) interceptListTaskCalls(w http.ResponseWriter, r *http.Request) {
+	pg := s.pg(w)
+	if pg == nil {
+		return
+	}
+	before, err := strconv.ParseInt(defaultQuery(r, "before_id", "0"), 10, 64)
+	if err != nil || before < 0 {
+		writeErr(w, 400, "before_id 必须为非负整数")
+		return
+	}
+	limit, err := strconv.Atoi(defaultQuery(r, "limit", "100"))
+	if err != nil || limit < 1 || limit > 500 {
+		writeErr(w, 400, "limit 必须在 1 到 500 之间")
+		return
+	}
+	rows, err := pg.ListTaskToolCalls(r.Context(), r.PathValue("taskID"), before, limit)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	var next int64
+	if len(rows) == limit {
+		next = rows[len(rows)-1].ID
+	}
+	writeJSON(w, 200, map[string]any{"calls": rows, "next_before_id": next})
+}
+func defaultQuery(r *http.Request, key, fallback string) string {
+	if v := r.URL.Query().Get(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func (s *Server) interceptScopeConfig(w http.ResponseWriter, r *http.Request) {
+	pg := s.pg(w)
+	if pg == nil {
+		return
+	}
+	if r.Method == http.MethodPut {
+		var req struct {
+			Action string `json:"unknown_target_action"`
+		}
+		if err := decode(r, &req); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		switch req.Action {
+		case "ask", "deny", "allow":
+		default:
+			writeErr(w, 400, "unknown_target_action 必须是 ask、deny 或 allow")
+			return
+		}
+		if err := pg.SetSetting("scope_unknown_target_action", req.Action); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	action, _, err := pg.GetSetting("scope_unknown_target_action")
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	switch action {
+	case "ask", "deny", "allow":
+	default:
+		action = "ask"
+	}
+	writeJSON(w, 200, map[string]string{"unknown_target_action": action})
 }

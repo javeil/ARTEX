@@ -20,29 +20,31 @@ type InterceptContextEntry struct {
 // InterceptAudit is captured at review time. It is deliberately excluded from
 // polling/list responses; old rows have no audit instead of reconstructed data.
 type InterceptAudit struct {
-	RunID            string                  `json:"run_id,omitempty"`
-	ToolUseID        string                  `json:"tool_use_id,omitempty"`
-	Correlation      string                  `json:"correlation"` // exact | ambiguous | unavailable
-	InputDigest      string                  `json:"input_digest"`
-	UserMessage      string                  `json:"user_message"`
-	UserTruncated    bool                    `json:"user_truncated,omitempty"`
-	Context          []InterceptContextEntry `json:"context"`
-	ContextTruncated bool                    `json:"context_truncated,omitempty"`
-	CapturedAt       time.Time               `json:"captured_at"`
-	ModelFallback    bool                    `json:"model_fallback,omitempty"`
-	ModelInput       json.RawMessage         `json:"model_input,omitempty"`
-	ModelInputDigest string                  `json:"model_input_digest,omitempty"`
-	InitialAction    string                  `json:"initial_action"`
-	InitialReason    string                  `json:"initial_reason"`
-	EffectiveAction  string                  `json:"effective_action,omitempty"`
-	DecisionReason   string                  `json:"decision_reason,omitempty"`
-	RuleName         string                  `json:"rule_name,omitempty"`
-	ConfigDigest     string                  `json:"config_digest,omitempty"`
-	ProfileID        int64                   `json:"profile_id,omitempty"`
-	ExecutionStatus  string                  `json:"execution_status"`
-	Output           string                  `json:"output,omitempty"`
-	OutputTruncated  bool                    `json:"output_truncated,omitempty"`
-	ExecutionEndedAt *time.Time              `json:"execution_ended_at,omitempty"`
+	AuthorizationVersion string                  `json:"authorization_version,omitempty"`
+	ApprovedCallDigest   string                  `json:"approved_call_digest,omitempty"`
+	RunID                string                  `json:"run_id,omitempty"`
+	ToolUseID            string                  `json:"tool_use_id,omitempty"`
+	Correlation          string                  `json:"correlation"` // exact | ambiguous | unavailable
+	InputDigest          string                  `json:"input_digest"`
+	UserMessage          string                  `json:"user_message"`
+	UserTruncated        bool                    `json:"user_truncated,omitempty"`
+	Context              []InterceptContextEntry `json:"context"`
+	ContextTruncated     bool                    `json:"context_truncated,omitempty"`
+	CapturedAt           time.Time               `json:"captured_at"`
+	ModelFallback        bool                    `json:"model_fallback,omitempty"`
+	ModelInput           json.RawMessage         `json:"model_input,omitempty"`
+	ModelInputDigest     string                  `json:"model_input_digest,omitempty"`
+	InitialAction        string                  `json:"initial_action"`
+	InitialReason        string                  `json:"initial_reason"`
+	EffectiveAction      string                  `json:"effective_action,omitempty"`
+	DecisionReason       string                  `json:"decision_reason,omitempty"`
+	RuleName             string                  `json:"rule_name,omitempty"`
+	ConfigDigest         string                  `json:"config_digest,omitempty"`
+	ProfileID            int64                   `json:"profile_id,omitempty"`
+	ExecutionStatus      string                  `json:"execution_status"`
+	Output               string                  `json:"output,omitempty"`
+	OutputTruncated      bool                    `json:"output_truncated,omitempty"`
+	ExecutionEndedAt     *time.Time              `json:"execution_ended_at,omitempty"`
 }
 
 type InterceptDetail struct {

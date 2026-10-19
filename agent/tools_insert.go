@@ -377,7 +377,7 @@ func (t *ToolSet) insertAssets() actool.CoreTool {
 func (t *ToolSet) addCompanyScope() actool.CoreTool {
 	return writeTool(
 		"add_company_scope",
-		"把域名/IP/CIDR/ICP备案/企业关键词加入某公司的【资产范围】——域名、网络和ICP会自动认领命中的资产，关键词只提供给Agent作为范围提示。\n"+
+		"把域名/IP/CIDR/ICP备案/企业关键词加入某公司的【发现资产范围，不能授予网络测试权限】——域名、网络和ICP会自动认领命中的资产，关键词只提供给Agent作为范围提示。\n"+
 			"公司名唯一：company 不存在则新建，已存在则复用(只把范围并进去)。\n"+
 			"scope 一行一条，系统自动识别：根域名 / URL / 单个 IP / CIDR 网段 / ICP备案 / 企业关键词。\n"+
 			"务必给 reason 说明归属依据(whois/证书/ASN 等)。\n"+
@@ -409,7 +409,7 @@ func (t *ToolSet) addCompanyScope() actool.CoreTool {
 				return actool.Errorf("创建/获取公司失败: " + err.Error()), nil
 			}
 			lines := splitLines(a.Scope)
-			added, skipped, invalid, errMsgs := t.cs.AddScope(companyID, lines, a.Reason)
+			added, skipped, invalid, errMsgs := t.cs.AddDiscoveredScope(companyID, lines, a.Reason)
 			out := map[string]any{
 				"company_id": companyID,
 				"added":      added,

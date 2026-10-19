@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/json"
 	"regexp"
 	"testing"
 )
@@ -41,6 +42,22 @@ func TestDeleteEndpointPathPattern(t *testing.T) {
 	for _, s := range miss {
 		if re.MatchString(s) {
 			t.Errorf("误拦: %s", s)
+		}
+	}
+}
+
+// A real newline is escaped inside tool_input JSON. The old proximity regex
+// incorrectly sees the unrelated curl output path as an rm operand.
+func TestSystemDirectoryRuleDoesNotCrossJSONEscapedNewline(t *testing.T) {
+	command := "rm tmp.scan\ncurl -s https://example.com -o /dev/null"
+	raw, _ := json.Marshal(map[string]string{"command": command})
+	if regexp.MustCompile(systemDirectoryPattern).Match(raw) {
+		t.Fatalf("unrelated absolute path treated as rm target: %s", raw)
+	}
+	for _, command := range []string{"rm /etc/passwd", "rm -f /bin/sh", "rm /", "rm -- /var/log/auth.log"} {
+		raw, _ := json.Marshal(map[string]string{"command": command})
+		if !regexp.MustCompile(systemDirectoryPattern).Match(raw) {
+			t.Errorf("critical rm operand missed: %s", raw)
 		}
 	}
 }

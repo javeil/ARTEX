@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/guard"
+	"github.com/Autumn-27/artex/internal/scopedfetch"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 )
@@ -343,6 +345,11 @@ func (s *Server) runCommandTool(ctx context.Context, execRaw json.RawMessage, pa
 		ctx, cancel = context.WithTimeout(ctx, timeoutOr(spec.TimeoutMs, 120000))
 		defer cancel()
 	}
+	if blocked, message, updated := s.customToolGuard().Hooks().PreToolUse(ctx, "Bash", bashIn); blocked {
+		return actool.Errorf(message), nil
+	} else if len(updated) > 0 {
+		bashIn = updated
+	}
 	return actool.NewBash().Call(ctx, bashIn, tc)
 }
 
@@ -351,6 +358,10 @@ func (s *Server) runCommandTool(ctx context.Context, execRaw json.RawMessage, pa
 func (s *Server) runScriptTool(ctx context.Context, key string, execRaw json.RawMessage, params map[string]any, tc *actool.ToolContext) (actool.Result, error) {
 	var spec scriptExec
 	_ = json.Unmarshal(execRaw, &spec)
+	raw, _ := json.Marshal(map[string]any{"command": "python3 -c " + shellQuote(spec.Code), "params": params})
+	if blocked, message, _ := s.customToolGuard().Hooks().PreToolUse(ctx, "Bash", raw); blocked {
+		return actool.Errorf(message), nil
+	}
 	if strings.TrimSpace(spec.Code) == "" {
 		return actool.Errorf("script code 为空"), nil
 	}
@@ -418,6 +429,9 @@ func execPython(ctx context.Context, interp, key, code string, params map[string
 // ---------- http:原生请求 + 代理 ----------
 
 func (s *Server) runHTTPTool(ctx context.Context, execRaw json.RawMessage, params map[string]any, tc *actool.ToolContext) (actool.Result, error) {
+	if s.m != nil && s.m.interceptor != nil {
+		ctx = s.m.interceptor.WithScope(ctx)
+	}
 	var spec httpExec
 	_ = json.Unmarshal(execRaw, &spec)
 	method := strings.ToUpper(strings.TrimSpace(spec.Method))
@@ -427,6 +441,10 @@ func (s *Server) runHTTPTool(ctx context.Context, execRaw json.RawMessage, param
 	rawURL := renderTemplate(spec.URL, params, identity)
 	if strings.TrimSpace(rawURL) == "" {
 		return actool.Errorf("http url 为空"), nil
+	}
+	gateInput, _ := json.Marshal(map[string]string{"url": rawURL, "method": method, "body": renderTemplate(spec.Body, params, identity)})
+	if blocked, message, _ := s.customToolGuard().Hooks().PreToolUse(ctx, "WebFetch", gateInput); blocked {
+		return actool.Errorf(message), nil
 	}
 	var bodyReader io.Reader
 	if spec.Body != "" {
@@ -445,12 +463,19 @@ func (s *Server) runHTTPTool(ctx context.Context, execRaw json.RawMessage, param
 	if tr := s.httpProxyTransport(spec); tr != nil {
 		client.Transport = tr
 	}
+	scopedfetch.ProtectClient(client)
 	resp, err := client.Do(req)
 	if err != nil {
 		return actool.Errorf("请求失败: " + err.Error()), nil
 	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	closeErr := resp.Body.Close()
+	if readErr == nil {
+		readErr = closeErr
+	}
+	if readErr != nil {
+		return actool.Errorf("目标响应读取/审计失败: " + readErr.Error()), nil
+	}
 	out := map[string]any{"status": resp.StatusCode, "body": string(respBody)}
 	b, _ := json.Marshal(out)
 	return actool.Text(actool.Capture(tc, string(b))), nil
@@ -528,4 +553,11 @@ func scalarStr(v any) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func (s *Server) customToolGuard() *guard.Guard {
+	if s.m != nil && s.m.interceptor != nil {
+		return guard.NewWithInterceptor(s.m.interceptor)
+	}
+	return guard.New()
 }

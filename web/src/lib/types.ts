@@ -772,6 +772,7 @@ export interface FindingRetest {
 
 export interface Conversation {
   id: number;
+  task_id?: number | null;
   running?: boolean; // live server state, returned with the conversation list
   agent_key: string;
   title: string;
@@ -1291,6 +1292,8 @@ export type InterceptMatchType = "string" | "regex";
 
 export interface InterceptRule {
   id: number;
+  protected?: boolean;
+  core_protection_disabled?: boolean;
   name: string;
   enabled: boolean;
   priority: number;
@@ -1734,4 +1737,54 @@ export interface FindingCaseReviewRun {
   task_id: string;
   state: "queued" | "running" | "done" | "failed";
   error: string;
+}
+
+export interface TargetSpec {
+  host: string;
+  include_subdomains?: boolean;
+  schemes?: string[];
+  ports?: number[];
+  path_prefixes?: string[];
+  excluded_path_prefixes?: string[];
+}
+export interface TargetPolicy {
+  constraint_acknowledgements?: Record<string, string>;
+  mode: "standard" | "read_only" | "passive";
+  targets?: TargetSpec[];
+  denied_effects?: string[];
+  accounts?: string[];
+  operations?: { target: TargetSpec; methods: string[]; effect: string; account_field?: string; cleanup_if_match?: boolean }[];
+  budget: Partial<Record<"requests_per_second" | "max_concurrent" | "max_requests" | "account_attempts" | "account_window_seconds" | "consecutive_failures" | "max_latency_ms" | "cooldown_seconds", number>>;
+  starts_at?: string | null;
+  expires_at?: string | null;
+}
+export interface TargetControlState {
+  blocked: boolean;
+  stopping: boolean;
+  active: number;
+  stopped: boolean;
+}
+export interface TargetRequestRecord {
+  id: number;
+  url: string;
+  method: string;
+  state: string;
+  status_code: number;
+  error: string;
+  latency_ms: number;
+}
+export interface TargetTestResource {
+  id: number;
+  url: string;
+  etag: string;
+  state: string;
+  creation_request_id: number;
+  conditional_cleanup: boolean;
+}
+
+export interface TargetPolicyResponse {
+  policy: TargetPolicy;
+  authorization_version: string;
+  unconfirmed_constraints?: { id: number; text: string; digest: string }[];
+  effective_policy?: TargetPolicy;
 }

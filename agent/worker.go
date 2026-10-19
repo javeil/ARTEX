@@ -378,6 +378,14 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// 收敛工具面、减少低价值调用。其余 SDK 默认工具(Read/Write/Edit/LS/Bash/Sleep)照常。
 	base = append(base, defaultToolsExcept("MultiEdit", "Glob", "Grep")...)
 	ctx = WithRunInfo(ctx, RunInfo{TaskID: taskID, ExplorationID: explorationID(ts), IntentID: intent.ID})
+	var accessCleanup func()
+	var accessErr error
+	ctx, accessCleanup, accessErr = prepareTargetAccess(ctx, w.proxyAddr, w.proxyCACert)
+	if accessErr != nil {
+		return "", WriteCounts{}, accessErr
+	}
+	defer accessCleanup()
+
 	tools, def, cleanup := AugmentTools(ctx, "worker", base)
 	defer cleanup()
 
@@ -450,7 +458,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 		DeepSeekSearchModel:   w.webSearch.DeepSeekModel,
 		WebSearchProxy:        w.webSearch.Proxy,
 		// Bash 子命令的 HTTP 默认走记录代理 + 信任其 CA（工具无需 -x/-k）。
-		BashEnv:    proxyEnv(w.proxyAddr, w.proxyCACert),
+		BashEnv:    targetProxyEnv(ctx, w.proxyAddr, w.proxyCACert),
 		WorkingDir: runDir,
 		MaxTurns:   w.maxTurns, // 0 = unlimited (configurable in agent management)
 		// 墙钟预算,轮边界判,不打断半路;0 = 不限。有任务级 deadline 时夹逼到 min(自身预算,
@@ -494,7 +502,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	noaSession := WorkerSessionID(ts.ID(), intent.ID)
 	enableNoa(&opts, w.noaEnabledFn, w.workDir, noaSession, noaWarn(noaSession))
 	ctx = attachSideCapture(ctx, &opts)
-	s := agentcore.NewSession(opts)
+	s := newScopedSession(opts)
 	defer s.Close() // release the session's background-task manager (temp dir + processes)
 
 	// Resume prior conversation if this intent was paused/blocked/exhausted and is

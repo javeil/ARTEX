@@ -41,6 +41,7 @@ type ScopeRule struct {
 	Value     string `json:"value,omitempty"`
 	Raw       string `json:"raw"`
 	Reason    string `json:"reason,omitempty"`
+	Source    string `json:"source"`
 }
 
 // CompanyStore operates on the companies + company_scope tables.
@@ -297,7 +298,7 @@ ORDER BY c.name`)
 func (s *CompanyStore) GetScope(companyID int64) ([]ScopeRule, error) {
 	rows, err := s.db.Query(`
 SELECT id, company_id, kind,
-       COALESCE(domain,''), COALESCE(net::text,''), COALESCE(value,''), raw, COALESCE(reason,'')
+       COALESCE(domain,''), COALESCE(net::text,''), COALESCE(value,''), raw, COALESCE(reason,''), source
 FROM company_scope
 WHERE company_id = $1
 ORDER BY id`, companyID)
@@ -308,7 +309,7 @@ ORDER BY id`, companyID)
 	out := make([]ScopeRule, 0)
 	for rows.Next() {
 		var r ScopeRule
-		if err := rows.Scan(&r.ID, &r.CompanyID, &r.Kind, &r.Domain, &r.Net, &r.Value, &r.Raw, &r.Reason); err != nil {
+		if err := rows.Scan(&r.ID, &r.CompanyID, &r.Kind, &r.Domain, &r.Net, &r.Value, &r.Raw, &r.Reason, &r.Source); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -326,6 +327,19 @@ func (s *CompanyStore) AddScope(companyID int64, lines []string, reason string) 
 	return s.AddScopeInputs(companyID, inputs, reason)
 }
 
+// AddDiscoveredScope records attribution evidence without granting permission.
+func (s *CompanyStore) AddDiscoveredScope(companyID int64, lines []string, reason string) (added, skipped, invalid int, errors []string) {
+	inputs := make([]ScopeInput, 0, len(lines))
+	for _, line := range lines {
+		inputs = append(inputs, ScopeInput{Value: line})
+	}
+	added, skipped, invalid, validationErrors, err := s.addScopeInputsChecked(companyID, inputs, reason, "agent")
+	if err != nil {
+		validationErrors = append(validationErrors, err.Error())
+	}
+	return added, skipped, invalid, validationErrors
+}
+
 // AddScopeInputs inserts structured scope rules. Empty kinds use the automatic
 // CIDR/IP/ICP/domain/keyword classification used by AddScope.
 func (s *CompanyStore) AddScopeInputs(companyID int64, inputs []ScopeInput, reason string) (added, skipped, invalid int, errors []string) {
@@ -341,6 +355,9 @@ func (s *CompanyStore) AddScopeInputs(companyID int64, inputs []ScopeInput, reas
 func (s *CompanyStore) AddScopeInputsChecked(companyID int64, inputs []ScopeInput, reason string) (
 	added, skipped, invalid int, validationErrors []string, err error,
 ) {
+	return s.addScopeInputsChecked(companyID, inputs, reason, "manual")
+}
+func (s *CompanyStore) addScopeInputsChecked(companyID int64, inputs []ScopeInput, reason, source string) (added, skipped, invalid int, validationErrors []string, err error) {
 	if err := ValidateCompanyScopeInputBounds(inputs); err != nil {
 		return 0, 0, 0, nil, err
 	}
@@ -365,7 +382,7 @@ func (s *CompanyStore) AddScopeInputsChecked(companyID int64, inputs []ScopeInpu
 		}
 		return 0, 0, invalid, errors, nil
 	}
-	added, skipped, needsAttribution, err := insertScopeRulesTx(tx, companyID, rules, reason)
+	added, skipped, needsAttribution, err := insertScopeRulesTx(tx, companyID, rules, reason, source)
 	if err != nil {
 		return 0, 0, invalid, errors, err
 	}
@@ -428,11 +445,11 @@ func lockCompanyScopeMutation(tx *sql.Tx) error {
 	return err
 }
 
-func insertScopeRulesTx(tx *sql.Tx, companyID int64, rules []ParsedScope, reason string) (
+func insertScopeRulesTx(tx *sql.Tx, companyID int64, rules []ParsedScope, reason string, sources ...string) (
 	added, skipped int, needsAttribution bool, err error,
 ) {
 	for _, rule := range rules {
-		inserted, insertErr := insertScopeRuleTx(tx, companyID, rule, reason)
+		inserted, insertErr := insertScopeRuleTx(tx, companyID, rule, reason, sources...)
 		if insertErr != nil {
 			return 0, 0, false, insertErr
 		}
@@ -448,27 +465,34 @@ func insertScopeRulesTx(tx *sql.Tx, companyID int64, rules []ParsedScope, reason
 
 // insertScopeRuleTx inserts a scope rule. inserted=false means a duplicate was
 // ignored by ON CONFLICT, not an error.
-func insertScopeRuleTx(tx *sql.Tx, companyID int64, rule ParsedScope, reason string) (inserted bool, err error) {
+func insertScopeRuleTx(tx *sql.Tx, companyID int64, rule ParsedScope, reason string, sources ...string) (inserted bool, err error) {
+	source := "manual"
+	if len(sources) > 0 {
+		source = sources[0]
+	}
 	var res interface{ RowsAffected() (int64, error) }
 	switch rule.Kind {
 	case "domain":
 		res, err = tx.Exec(`
-INSERT INTO company_scope(company_id, kind, domain, raw, reason)
-VALUES ($1, 'domain', $2, $3, $4)
-ON CONFLICT ON CONSTRAINT uq_sv2_domain DO NOTHING`,
-			companyID, rule.Domain, rule.Raw, reason)
+INSERT INTO company_scope(company_id, kind, domain, raw, reason, source)
+VALUES ($1, 'domain', $2, $3, $4, $5)
+ON CONFLICT ON CONSTRAINT uq_sv2_domain DO UPDATE SET source='manual', reason=excluded.reason
+WHERE company_scope.source='agent' AND excluded.source='manual' `,
+			companyID, rule.Domain, rule.Raw, reason, source)
 	case "ip", "cidr":
 		res, err = tx.Exec(`
-INSERT INTO company_scope(company_id, kind, net, raw, reason)
-VALUES ($1, $2, $3::cidr, $4, $5)
-ON CONFLICT ON CONSTRAINT uq_sv2_net DO NOTHING`,
-			companyID, rule.Kind, rule.Net, rule.Raw, reason)
+INSERT INTO company_scope(company_id, kind, net, raw, reason, source)
+VALUES ($1, $2, $3::cidr, $4, $5, $6)
+ON CONFLICT ON CONSTRAINT uq_sv2_net DO UPDATE SET source='manual', reason=excluded.reason
+WHERE company_scope.source='agent' AND excluded.source='manual' `,
+			companyID, rule.Kind, rule.Net, rule.Raw, reason, source)
 	case "icp", "keyword":
 		res, err = tx.Exec(`
-INSERT INTO company_scope(company_id, kind, value, raw, reason)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (company_id, kind, value) WHERE kind IN ('icp','keyword') DO NOTHING`,
-			companyID, rule.Kind, rule.Value, rule.Raw, reason)
+INSERT INTO company_scope(company_id, kind, value, raw, reason, source)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (company_id, kind, value) WHERE kind IN ('icp','keyword') DO UPDATE SET source='manual', reason=excluded.reason
+WHERE company_scope.source='agent' AND excluded.source='manual' `,
+			companyID, rule.Kind, rule.Value, rule.Raw, reason, source)
 	default:
 		return false, fmt.Errorf("unsupported company scope kind %q", rule.Kind)
 	}

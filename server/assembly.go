@@ -10,6 +10,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/intercept"
 	"github.com/Autumn-27/artex/traffic"
 	"github.com/Autumn-27/norma/skill"
 	actool "github.com/Autumn-27/norma/tool"
@@ -83,7 +84,15 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 				if !directVisible && !skillGated {
 					continue // neither directly visible nor referenced by a visible skill
 				}
-				cl, err := connectMCP(ctx, m)
+				configured, release, err := browserTargetGateway(ctx, m)
+				if err != nil {
+					log.Printf("[mcp] %s 目标网关配置失败: %v", m.Name, err)
+					continue
+				}
+				if release != nil {
+					closers = append(closers, closeFunc(release))
+				}
+				cl, err := connectMCP(ctx, configured)
 				if err != nil {
 					log.Printf("[mcp] %s 连接失败: %v", m.Name, err)
 					continue
@@ -95,6 +104,9 @@ func wireAgentAugment(pg *db.DB, skillDir string, hostTools func() ([]actool.Cor
 					continue
 				}
 				for _, t := range ts {
+					if configured != m && m.Name == "browser" {
+						intercept.MarkGatewayMCP(ctx, t.Name())
+					}
 					extra = append(extra, t)
 					allNames = append(allNames, t.Name())
 					serverTools[m.Name] = append(serverTools[m.Name], t.Name())
@@ -371,3 +383,7 @@ func jsonStrMap(raw json.RawMessage) map[string]string {
 	}
 	return out
 }
+
+type closeFunc func()
+
+func (f closeFunc) Close() error { f(); return nil }

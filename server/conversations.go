@@ -79,6 +79,7 @@ func (s *Server) pgCreateConversation(w http.ResponseWriter, r *http.Request) {
 		AgentKey     string `json:"agent_key"`
 		Title        string `json:"title"`
 		LLMProfileID *int64 `json:"llm_profile_id"`
+		TaskID       *int64 `json:"task_id"`
 	}
 	if !decodeConversationRequest(w, r, &req) {
 		return
@@ -119,6 +120,20 @@ func (s *Server) pgCreateConversation(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
+	}
+	if req.TaskID != nil {
+		task, e := pg.GetTask(*req.TaskID)
+		if e != nil || task == nil {
+			_ = pg.DeleteConversation(c.ID)
+			writeErr(w, 400, "授权任务不存在")
+			return
+		}
+		if e = pg.BindConversationTask(c.ID, req.TaskID); e != nil {
+			_ = pg.DeleteConversation(c.ID)
+			writeErr(w, 500, e.Error())
+			return
+		}
+		c.TaskID = req.TaskID
 	}
 	writeJSON(w, 200, c)
 }
@@ -494,6 +509,10 @@ func (s *Server) conversationRunContext(id int64, busyKey string) (context.Conte
 }
 
 func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelCauseFunc, c *db.Conversation, msg, busyKey string) {
+	ctx = s.m.interceptor.WithScope(ctx)
+	if c.TaskID != nil {
+		ctx = intercept.WithTaskContext(ctx, strconv.FormatInt(*c.TaskID, 10), c.AgentKey, nil)
+	}
 	defer func() {
 		cancel(agent.AbortChatTurnFinished)
 		s.chatMu.Lock()

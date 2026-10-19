@@ -1091,6 +1091,12 @@ CREATE TABLE IF NOT EXISTS intercept_rules (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE intercept_rules ADD COLUMN IF NOT EXISTS protected BOOLEAN NOT NULL DEFAULT false;
+CREATE TABLE IF NOT EXISTS intercept_rule_changes (
+ id BIGSERIAL PRIMARY KEY, rule_id BIGINT NOT NULL,
+ actor TEXT NOT NULL, reason TEXT NOT NULL, enabled BOOLEAN NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 DROP TRIGGER IF EXISTS trg_intercept_rules_upd ON intercept_rules;
 CREATE TRIGGER trg_intercept_rules_upd BEFORE UPDATE ON intercept_rules
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -1544,3 +1550,65 @@ CREATE TABLE IF NOT EXISTS task_schedule_history (
  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_schedule_history ON task_schedule_history(schedule_id,id DESC);
+
+-- Every PreToolUse call, including unmatched and disabled-interceptor calls.
+-- Deliberately no FK to tasks: audit survives task deletion.
+CREATE TABLE IF NOT EXISTS tool_call_audit (
+ id BIGSERIAL PRIMARY KEY,
+ task_id TEXT NOT NULL DEFAULT '', tool_name TEXT NOT NULL,
+ input_summary TEXT NOT NULL,
+ decision TEXT NOT NULL CHECK (decision IN ('allow','ask','deny')),
+ effective_action TEXT NOT NULL CHECK (effective_action IN ('allow','pending','deny')),
+ decision_source TEXT NOT NULL,
+ reason TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_tool_call_audit_task_id ON tool_call_audit(task_id,id DESC);
+
+-- Operator-confirmed target authorization, shared by every active test entry.
+CREATE TABLE IF NOT EXISTS task_target_policies (
+ task_id BIGINT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+ policy JSONB NOT NULL DEFAULT '{}', revision BIGINT NOT NULL DEFAULT 1,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS task_id BIGINT REFERENCES tasks(id) ON DELETE SET NULL;
+
+CREATE TABLE IF NOT EXISTS target_requests (
+ id BIGSERIAL PRIMARY KEY, task_id TEXT NOT NULL, target_key TEXT NOT NULL,
+ url TEXT NOT NULL, method TEXT NOT NULL, account_hash TEXT NOT NULL DEFAULT '',
+ budget JSONB NOT NULL, state TEXT NOT NULL DEFAULT 'running',
+ status_code INTEGER NOT NULL DEFAULT 0, latency_ms INTEGER NOT NULL DEFAULT 0,
+ error TEXT NOT NULL DEFAULT '', started_at TIMESTAMPTZ NOT NULL DEFAULT now(), finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_target_requests_service_time ON target_requests(target_key,started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_target_requests_active ON target_requests(target_key) WHERE state='running';
+CREATE INDEX IF NOT EXISTS idx_target_requests_task ON target_requests(task_id,id DESC);
+CREATE INDEX IF NOT EXISTS idx_target_requests_account ON target_requests(target_key,account_hash,started_at DESC) WHERE account_hash<>'';
+CREATE TABLE IF NOT EXISTS target_budget_claims (
+ task_id TEXT NOT NULL, target_key TEXT NOT NULL, budget JSONB NOT NULL,
+ PRIMARY KEY(task_id,target_key)
+);
+CREATE TABLE IF NOT EXISTS target_safety_state (
+ target_key TEXT PRIMARY KEY, blocked_until TIMESTAMPTZ,
+ consecutive_failures INTEGER NOT NULL DEFAULT 0, reason TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS target_control_events (
+ id BIGSERIAL PRIMARY KEY, task_id TEXT NOT NULL, actor TEXT NOT NULL,
+ action TEXT NOT NULL, reason TEXT NOT NULL, target_key TEXT NOT NULL DEFAULT '',
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS target_test_resources (
+ id BIGSERIAL PRIMARY KEY, task_id TEXT NOT NULL, url TEXT NOT NULL,
+ creation_request_id BIGINT NOT NULL REFERENCES target_requests(id),
+ etag TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'active',
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(creation_request_id,url)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_target_resource_active_url ON target_test_resources(url) WHERE state='active';
+CREATE INDEX IF NOT EXISTS idx_target_resources_task ON target_test_resources(task_id,id DESC);
+
+ALTER TABLE target_test_resources ADD COLUMN IF NOT EXISTS conditional_cleanup BOOLEAN NOT NULL DEFAULT false;
+
+-- Keep company attribution discovery separate from operator authorization.
+ALTER TABLE company_scope ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
