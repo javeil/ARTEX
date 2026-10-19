@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 )
 
 type targetRunState struct {
@@ -45,7 +46,28 @@ func (i *Interceptor) acquireTargetIO(ctx context.Context, kind string) (context
 	if id == "" {
 		return ctx, nil, fmt.Errorf("主动测试未绑定授权任务")
 	}
+	// Future authorization deadlines also bound SDK-owned processes/PTYs, not
+	// only individual HTTP requests. After expiry a fresh analysis run may
+	// inspect local results, while ScopeDecision rejects new active tools.
+	if i.db == nil {
+		return ctx, nil, fmt.Errorf("授权存储不可用")
+	}
+	p, err := i.db.LoadTargetPolicy(ctx, id)
+	if err != nil {
+		return ctx, nil, err
+	}
+	var deadline *time.Time
+	if err = i.db.QueryRowContext(ctx, `SELECT deadline_at FROM tasks WHERE id::text=$1`, id).Scan(&deadline); err != nil {
+		return ctx, nil, err
+	}
+	if p.ExpiresAt != nil && (deadline == nil || p.ExpiresAt.Before(*deadline)) {
+		deadline = p.ExpiresAt
+	}
 	child, cancel := context.WithCancel(ctx)
+	if deadline != nil && time.Now().Before(*deadline) {
+		cancel()
+		child, cancel = context.WithDeadline(ctx, *deadline)
+	}
 	i.runtime.mu.Lock()
 	s := i.targetStateLocked(id)
 	if (s.blocked && kind != "analysis_run") || s.draining {
