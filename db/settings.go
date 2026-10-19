@@ -3,6 +3,9 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"sort"
+	"strings"
 )
 
 // Settings is a tiny key-value store for global app config the UI toggles at
@@ -66,4 +69,53 @@ func (d *DB) SetBool(key string, val bool) error {
 		return d.SetSetting(key, "true")
 	}
 	return d.SetSetting(key, "false")
+}
+
+// GetSettings reads a selected configuration in one database snapshot. A failed
+// read is distinct from an unset key; callers must never interpret it as disabled.
+func (d *DB) GetSettings(ctx context.Context, keys []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(keys) == 0 {
+		return out, nil
+	}
+	args := make([]any, len(keys))
+	placeholders := make([]string, len(keys))
+	for j, key := range keys {
+		args[j] = key
+		placeholders[j] = fmt.Sprintf("$%d", j+1)
+	}
+	rows, err := d.QueryContext(ctx, `SELECT key,value FROM settings WHERE key IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k, v string
+		if err = rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		out[k] = v
+	}
+	return out, rows.Err()
+}
+
+// SetSettingsContext commits dependent settings together, so another process
+// cannot observe enabled=true alongside half of an authorization configuration.
+func (d *DB) SetSettingsContext(ctx context.Context, values map[string]string) error {
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=now()`, k, values[k]); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
