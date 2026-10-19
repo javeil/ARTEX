@@ -987,6 +987,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/tasks/{id}/test-resources", s.targetResources)
 	mux.HandleFunc("GET /api/tasks/{id}/target-control", s.targetControl)
 	mux.HandleFunc("POST /api/tasks/{id}/target-control/resume", s.targetControl)
+	mux.HandleFunc("POST /api/tasks/{id}/target-control/reconcile", s.targetControl)
 	mux.HandleFunc("POST /api/tasks/{id}/target-control/reset-cooldown", s.resetTargetSafety)
 	mux.HandleFunc("GET /api/tasks/{id}/target-requests", s.targetRequests)
 	mux.HandleFunc("GET /api/tasks/{id}/target-policy", s.targetPolicy)

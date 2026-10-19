@@ -9,6 +9,10 @@ import (
 )
 
 func (s *Server) targetControl(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/reconcile") {
+		s.reconcileTargetRequests(w, r)
+		return
+	}
 	pg := s.pg(w)
 	if pg == nil {
 		return

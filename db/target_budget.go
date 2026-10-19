@@ -130,13 +130,19 @@ func (d *DB) FinishTargetRequest(ctx context.Context, id int64, status, latencyM
 	defer tx.Rollback()
 	var key string
 	var raw []byte
-	err = tx.QueryRowContext(ctx, `UPDATE target_requests SET state='finished',status_code=$2,latency_ms=$3,error=$4,finished_at=now() WHERE id=$1 AND state='running' RETURNING target_key,budget`, id, status, latencyMS, requestErr).Scan(&key, &raw)
-	if err != nil {
+	// Use the same service-lock order as reserve/reconcile before touching the
+	// request row, so operator recovery cannot deadlock an in-flight completion.
+	if err = tx.QueryRowContext(ctx, `SELECT target_key FROM target_requests WHERE id=$1`, id).Scan(&key); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "target-budget:"+key); err != nil {
 		return err
 	}
+	err = tx.QueryRowContext(ctx, `UPDATE target_requests SET state='finished',status_code=$2,latency_ms=$3,error=$4,finished_at=now() WHERE id=$1 AND state='running' RETURNING target_key,budget`, id, status, latencyMS, requestErr).Scan(&key, &raw)
+	if err != nil {
+		return err
+	}
+
 	var b TargetBudget
 	if err = json.Unmarshal(raw, &b); err != nil {
 		return err
