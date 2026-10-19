@@ -95,6 +95,7 @@ type TargetBudget struct {
 // Missing target restrictions retain legacy manually granted hosts, never grant
 // new hosts. An explicit target list narrows those grants.
 type TargetPolicy struct {
+	RestoreReviewRequired      bool              `json:"restore_review_required,omitempty"`
 	ConstraintAcknowledgements map[string]string `json:"constraint_acknowledgements,omitempty"`
 	Mode                       string            `json:"mode"` // standard|read_only|passive
 	Targets                    []TargetSpec      `json:"targets,omitempty"`
@@ -273,6 +274,16 @@ func (d *DB) LoadTargetPolicy(ctx context.Context, id string) (TargetPolicy, err
 	return p, nil
 }
 func (d *DB) SaveTargetPolicy(ctx context.Context, id string, p TargetPolicy) error {
+	return d.saveTargetPolicy(ctx, id, p, "")
+}
+func (d *DB) ConfirmTargetPolicy(ctx context.Context, id string, p TargetPolicy, actor string) error {
+	if actor == "" {
+		return fmt.Errorf("operator identity required")
+	}
+	p.RestoreReviewRequired = false
+	return d.saveTargetPolicy(ctx, id, p, actor)
+}
+func (d *DB) saveTargetPolicy(ctx context.Context, id string, p TargetPolicy, actor string) error {
 	if err := p.Validate(); err != nil {
 		return err
 	}
@@ -288,6 +299,13 @@ func (d *DB) SaveTargetPolicy(ctx context.Context, id string, p TargetPolicy) er
 		return err
 	}
 	defer tx.Rollback()
+	if actor != "" {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO target_control_events(task_id,actor,action,reason)
+   SELECT $1,$2,'confirm_restored_authorization','Operator reviewed restored task policy'
+   WHERE EXISTS(SELECT 1 FROM task_target_policies WHERE task_id::text=$1 AND policy->>'restore_review_required'='true')`, id, actor); err != nil {
+			return err
+		}
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO task_target_policies(task_id,policy) SELECT id,$2::jsonb FROM tasks WHERE id::text=$1 ON CONFLICT(task_id) DO UPDATE SET policy=excluded.policy,revision=task_target_policies.revision+1,updated_at=now()`, id, raw)
 	if err != nil {
 		return err
@@ -321,6 +339,9 @@ func (d *DB) CheckTaskTarget(ctx context.Context, id string, t Target) error {
 	p, err := d.LoadTargetPolicy(ctx, id)
 	if err != nil {
 		return err
+	}
+	if p.RestoreReviewRequired {
+		return fmt.Errorf("恢复的任务授权尚未由用户重新确认")
 	}
 	if p.Mode == "passive" {
 		return fmt.Errorf("本任务只允许被动分析，不允许主动访问目标")
@@ -444,6 +465,9 @@ func (d *DB) CheckTaskExecution(ctx context.Context, id string) error {
 	p, err := d.LoadTargetPolicy(ctx, id)
 	if err != nil {
 		return err
+	}
+	if p.RestoreReviewRequired {
+		return fmt.Errorf("恢复的任务授权尚未由用户重新确认")
 	}
 	now := time.Now()
 	if (p.StartsAt != nil && now.Before(*p.StartsAt)) || (p.ExpiresAt != nil && !now.Before(*p.ExpiresAt)) {

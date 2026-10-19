@@ -1748,6 +1748,7 @@ export interface TargetSpec {
   excluded_path_prefixes?: string[];
 }
 export interface TargetPolicy {
+  restore_review_required?: boolean;
   constraint_acknowledgements?: Record<string, string>;
   mode: "standard" | "read_only" | "passive";
   targets?: TargetSpec[];

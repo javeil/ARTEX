@@ -48,7 +48,7 @@ func (s *Server) targetPolicy(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, err.Error())
 			return
 		}
-		if err := pg.SaveTargetPolicy(r.Context(), id, p); err != nil {
+		if err := pg.ConfirmTargetPolicy(r.Context(), id, p, "ARTEX administrator"); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}

@@ -96,6 +96,14 @@ func (i *Interceptor) ScopeDecision(ctx context.Context, tool string, input []by
 		return Decision{}, false
 	}
 	hosts, unknown := ScopeTargets(tool, input)
+	if len(hosts) > 0 || unknown {
+		if i.db == nil {
+			return Decision{Action: "deny", Message: "授权存储不可用"}, true
+		}
+		if err := i.db.CheckTaskExecution(ctx, TaskIDFromContext(ctx)); err != nil {
+			return Decision{Action: "deny", Message: "目标不在本任务授权范围：" + err.Error()}, true
+		}
+	}
 	if (len(hosts) > 0 || unknown) && i.TargetIOState(TaskIDFromContext(ctx)).Blocked {
 		return Decision{Action: "deny", Message: "目标访问已停止，需用户明确恢复"}, true
 	}
