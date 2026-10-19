@@ -431,8 +431,8 @@ func (d *DB) CheckTaskTarget(ctx context.Context, id string, t Target) error {
 func (d *DB) AuthorizationVersion(ctx context.Context, id string) (string, error) {
 	var raw string
 	err := d.QueryRowContext(ctx, `SELECT jsonb_build_object(
- 'task',jsonb_build_array(t.status,t.paused,t.queued,t.deadline_at,t.archived_at),
- 'policy',(SELECT policy FROM task_target_policies WHERE task_id=t.id),
+ 'task',jsonb_build_array(t.status,t.paused,t.queued,t.deadline_at,t.archived_at,t.deleted_at,t.authorization_epoch),
+ 'policy',(SELECT jsonb_build_array(policy,revision) FROM task_target_policies WHERE task_id=t.id),
  'scope',(SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id) FROM task_scope s WHERE s.task_id=t.id AND s.source='manual'),
  'company',(SELECT jsonb_agg(to_jsonb(c) ORDER BY c.id) FROM company_scope c WHERE c.company_id IN (SELECT company_id FROM task_scope WHERE task_id=t.id AND kind='company' AND source='manual')),
  'exclude',(SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id) FROM task_intercept_rules r WHERE r.task_id=t.id),

@@ -558,6 +558,23 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS active_llm_profile_id BIGINT REFERENCES llm_profiles(id) ON DELETE SET NULL;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS llm_chain_revision BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+-- Monotonic fence: pause/resume must not resurrect an earlier approval.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS authorization_epoch BIGINT NOT NULL DEFAULT 1;
+CREATE OR REPLACE FUNCTION bump_task_authorization_epoch() RETURNS TRIGGER AS $$
+BEGIN
+ IF ROW(OLD.status,OLD.paused,OLD.queued,OLD.deadline_at,OLD.archived_at,OLD.deleted_at)
+    IS DISTINCT FROM ROW(NEW.status,NEW.paused,NEW.queued,NEW.deadline_at,NEW.archived_at,NEW.deleted_at) THEN
+   NEW.authorization_epoch := OLD.authorization_epoch + 1;
+ ELSE
+   NEW.authorization_epoch := OLD.authorization_epoch;
+ END IF;
+ RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_tasks_authorization_epoch ON tasks;
+CREATE TRIGGER trg_tasks_authorization_epoch BEFORE UPDATE ON tasks
+ FOR EACH ROW EXECUTE FUNCTION bump_task_authorization_epoch();
+
 CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks(category_id, created_at DESC)
     WHERE deleted_at IS NULL AND category_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_pinned ON tasks(pinned_at DESC)
