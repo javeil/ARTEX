@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/Autumn-27/artex/internal/shellinput"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -149,10 +150,7 @@ func DescribeOperations(tool string, input []byte) []Operation {
 	if tool != "Bash" && tool != "Monitor" && tool != "shell_open" && tool != "shell_send" {
 		return out
 	}
-	command := in.Command
-	if tool == "shell_send" {
-		command = in.Text
-	}
+	command := shellinput.Command(tool, input)
 	tree, e := syntax.NewParser().Parse(strings.NewReader(command), "operation")
 	if e != nil {
 		return out

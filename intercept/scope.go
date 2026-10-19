@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/Autumn-27/artex/internal/shellinput"
 	"net/netip"
 	"net/url"
 	"path/filepath"
@@ -115,7 +116,7 @@ func (i *Interceptor) ScopeDecision(ctx context.Context, tool string, input []by
 		if len(policy.Unconfirmed) > 0 {
 			return Decision{Action: "deny", Message: "人工操作约束尚未确认落实到可执行策略"}, true
 		}
-		strict := policy.Policy.Mode != "standard" || len(policy.Policy.Targets) > 0 || len(policy.Policy.DeniedEffects) > 0 || len(policy.Policy.Accounts) > 0 || policy.Policy.Budget != (db.TargetBudget{})
+		strict := policy.Policy.Mode != "standard" || len(policy.Policy.Targets) > 0 || len(policy.Policy.DeniedEffects) > 0 || len(policy.Policy.Accounts) > 0 || policy.Policy.Budget != (db.TargetBudget{}) || policy.Policy.StartsAt != nil || policy.Policy.ExpiresAt != nil || len(policy.HumanConstraints) > 0
 		requiresObservation := len(policy.Policy.Accounts) > 0 || policy.Policy.Budget != (db.TargetBudget{})
 		observable := observableHTTPCall(tool, input) || GatewayMCPObservable(ctx, tool)
 		if requiresObservation && !observable {
@@ -176,12 +177,10 @@ func ScopeTargets(tool string, input []byte) (hosts []string, unknown bool) {
 	}
 	switch tool {
 	case "Bash", "Monitor", "shell_open", "shell_send":
-		var command string
-		key := "command"
-		if tool == "shell_send" {
-			key = "text"
-		}
-		_ = json.Unmarshal(in[key], &command)
+		surface := shellinput.Read(tool, input)
+		command := surface.Command
+		unknown = surface.Interactive || surface.Err != nil
+
 		tree, err := syntax.NewParser().Parse(strings.NewReader(command), "scope")
 		if err != nil {
 			return nil, true
@@ -372,12 +371,7 @@ func ScopeTargetDetails(tool string, input []byte, hosts []string) []string {
 		}
 	}
 	if tool == "Bash" || tool == "Monitor" || tool == "shell_open" || tool == "shell_send" {
-		field := "command"
-		if tool == "shell_send" {
-			field = "text"
-		}
-		var cmd string
-		_ = json.Unmarshal(obj[field], &cmd)
+		cmd := shellinput.Command(tool, input)
 		for _, raw := range scopeURL.FindAllString(cmd, -1) {
 			if u, e := url.Parse(raw); e == nil && u.Hostname() != "" {
 				values = append(values, raw)
