@@ -137,6 +137,7 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) (result hook.Resu
 	if g.interceptor != nil {
 		updated, err := g.interceptor.PrepareShellInput(ctx, ev.ToolName, ev.Input)
 		if err != nil {
+			setAudit(ctx, "scope", "deny", err.Error())
 			return g.block(ev.ToolName, systemBlockMessage(err.Error()), cmd)
 		}
 		if len(updated) > 0 {

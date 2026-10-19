@@ -72,15 +72,18 @@ func (i *Interceptor) PrepareShellInput(ctx context.Context, tool string, input 
 			}
 		}
 		c.Args[0] = shellLiteral(trustedPath)
+		args := []string{name}
 		for _, w := range c.Args[1:] {
 			arg, known := operationWord(w)
 			if !known {
-				continue
-			}
-			if strings.HasPrefix(arg, "--proxy") || strings.HasPrefix(arg, "--noproxy") || strings.HasPrefix(arg, "--socks") || strings.HasPrefix(arg, "--config") || strings.HasPrefix(arg, "--connect-to") || strings.HasPrefix(arg, "--resolve") || arg == "--next" || arg == "-e" || strings.HasPrefix(arg, "--execute") || strings.HasPrefix(arg, "-K") || strings.HasPrefix(arg, "-x") {
-				problem = fmt.Errorf("目标访问不允许覆盖网关、目标映射或外部客户端配置，请使用任务 HTTP 工具")
+				problem = fmt.Errorf("HTTP 客户端含动态参数，无法证明网关约束，请用 TargetHTTP 传入明确请求")
 				return false
 			}
+			args = append(args, arg)
+		}
+		if err := validateHTTPClientArgs(name, args); err != nil {
+			problem = err
+			return false
 		}
 		prefix := []*syntax.Word{c.Args[0]}
 		suffix := []*syntax.Word{}
@@ -91,7 +94,7 @@ func (i *Interceptor) PrepareShellInput(ctx context.Context, tool string, input 
 			}
 		} else {
 			prefix = append(prefix, shellLiteral("--no-config"))
-			for _, v := range []string{"-e", "use_proxy=yes", "-e", "http_proxy=" + g.URL, "-e", "https_proxy=" + g.URL, "-e", "no_proxy="} {
+			for _, v := range []string{"-e", "use_proxy=yes", "-e", "http_proxy=" + g.URL, "-e", "https_proxy=" + g.URL, "-e", "ftp_proxy=" + g.URL, "-e", "no_proxy="} {
 				suffix = append(suffix, shellLiteral(v))
 			}
 		}

@@ -197,6 +197,9 @@ func ScopeTargets(tool string, input []byte) (hosts []string, unknown bool) {
 				}
 				return true
 			}
+			if len(call.Assigns) > 0 {
+				unknown = true
+			}
 			args := []string{}
 			for _, w := range call.Args {
 				v, ok := staticWord(w)
@@ -423,6 +426,19 @@ func observableHTTPCall(tool string, input []byte) bool {
 		}
 		switch filepath.Base(name) {
 		case "curl", "wget":
+			args := []string{filepath.Base(name)}
+			for _, word := range c.Args[1:] {
+				arg, known := operationWord(word)
+				if !known {
+					ok = false
+					return false
+				}
+				args = append(args, arg)
+			}
+			if validateHTTPClientArgs(filepath.Base(name), args) != nil {
+				ok = false
+				return false
+			}
 			found = true
 		default:
 			ok = false
