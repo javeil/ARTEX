@@ -75,14 +75,9 @@ func (d *DB) BeginTargetRequest(ctx context.Context, taskID string, target Targe
 		return out
 	}
 	var active, recent, total int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE state='running'),count(*) FILTER (WHERE started_at>now()-interval '1 second') FROM target_requests WHERE target_key=$1 AND state<>'denied' AND (state='running' OR started_at>now()-interval '1 second')`, key).Scan(&active, &recent); err != nil {
+	var earliestRecent *time.Time
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE state='running'),count(*) FILTER (WHERE started_at>clock_timestamp()-interval '1 second'),min(started_at) FILTER (WHERE started_at>clock_timestamp()-interval '1 second') FROM target_requests WHERE target_key=$1 AND state<>'denied' AND (state='running' OR started_at>clock_timestamp()-interval '1 second')`, key).Scan(&active, &recent, &earliestRecent); err != nil {
 		return 0, err
-	}
-	if cap := strict(func(b TargetBudget) int { return b.MaxConcurrent }); cap > 0 && active >= cap {
-		return 0, fmt.Errorf("目标并发预算已达上限 %d", cap)
-	}
-	if cap := strict(func(b TargetBudget) int { return b.RequestsPerSecond }); cap > 0 && recent >= cap {
-		return 0, fmt.Errorf("目标速率预算已达上限 %d/s", cap)
 	}
 	if budget.MaxRequests > 0 {
 		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM target_requests WHERE task_id=$1 AND state<>'denied'`, taskID).Scan(&total); err != nil {
@@ -103,7 +98,7 @@ func (d *DB) BeginTargetRequest(ctx context.Context, taskID string, target Targe
 				continue
 			}
 			var attempts int
-			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM target_requests WHERE target_key=$1 AND state<>'denied' AND account_hash=$2 AND started_at>now()-($3 * interval '1 second')`, key, digest, b.AccountWindowSeconds).Scan(&attempts); err != nil {
+			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM target_requests WHERE target_key=$1 AND state<>'denied' AND account_hash=$2 AND started_at>clock_timestamp()-($3 * interval '1 second')`, key, digest, b.AccountWindowSeconds).Scan(&attempts); err != nil {
 				return 0, err
 			}
 			if attempts >= b.AccountAttempts {
@@ -111,8 +106,19 @@ func (d *DB) BeginTargetRequest(ctx context.Context, taskID string, target Targe
 			}
 		}
 	}
+	// Check hard engagement/account limits before suggesting a capacity wait.
+	if cap := strict(func(b TargetBudget) int { return b.MaxConcurrent }); cap > 0 && active >= cap {
+		return 0, &TargetCapacityError{Message: fmt.Sprintf("目标并发预算已达上限 %d", cap), RetryAfter: 250 * time.Millisecond}
+	}
+	if cap := strict(func(b TargetBudget) int { return b.RequestsPerSecond }); cap > 0 && recent >= cap {
+		delay := 100 * time.Millisecond
+		if earliestRecent != nil {
+			delay = time.Until(earliestRecent.Add(time.Second))
+		}
+		return 0, &TargetCapacityError{Message: fmt.Sprintf("目标速率预算已达上限 %d/s", cap), RetryAfter: delay}
+	}
 	var id int64
-	err = tx.QueryRowContext(ctx, `INSERT INTO target_requests(task_id,target_key,url,method,account_hash,budget) VALUES ($1,$2,$3,$4,$5,$6::jsonb) RETURNING id`, taskID, key, target.URL, method, digest, raw).Scan(&id)
+	err = tx.QueryRowContext(ctx, `INSERT INTO target_requests(task_id,target_key,url,method,account_hash,budget,started_at) VALUES ($1,$2,$3,$4,$5,$6::jsonb,clock_timestamp()) RETURNING id`, taskID, key, target.URL, method, digest, raw).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
