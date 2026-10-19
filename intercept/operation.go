@@ -72,6 +72,11 @@ func classifyOperation(o Operation) string {
 	}
 	fields, err := bodyValues(o)
 	if err != nil {
+		// An ambiguous login is still account-sensitive. A generic probe route
+		// must not erase identity validation when the actual body is invalid.
+		if authPath.MatchString(o.Target.Path) {
+			return "authenticate"
+		}
 		return "unknown_write"
 	}
 	for key, list := range fields {
