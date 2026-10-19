@@ -1,7 +1,6 @@
 package db
 
 import (
-	"database/sql"
 	"fmt"
 	"net"
 	"strconv"
@@ -53,8 +52,9 @@ func ipToHostCIDR(ip string) string {
 	return ip + "/128"
 }
 
-// upsertTaskScope inserts one scope row idempotently (uq_task_scope). A duplicate is
-// silently ignored. taskID<=0 or empty kind → no-op.
+// upsertTaskScope inserts scope idempotently. A manual confirmation promotes an
+// existing discovered row and records its grant atomically; other duplicates are
+// ignored. taskID<=0 or empty kind is a no-op.
 func (s *AssetStore) upsertTaskScopeResult(ts TaskScope) (bool, error) {
 	if ts.TaskID <= 0 || ts.Kind == "" {
 		return false, nil
@@ -76,24 +76,30 @@ func (s *AssetStore) upsertTaskScopeResult(ts TaskScope) (bool, error) {
 	if src == "" {
 		src = "auto"
 	}
-	query := `
-INSERT INTO task_scope(task_id, kind, company_id, domain, net, value, source, reason)
-VALUES ($1,$2,$3,$4,$5::cidr,$6,$7,NULLIF($8,''))
-ON CONFLICT DO NOTHING`
-	var (
-		result sql.Result
-		err    error
-	)
+	// Confirmation and its audit share one statement. Only a trusted manual
+	// caller can promote an existing discovered row; agent/auto never downgrade
+	// human authorization or promote neighboring rows in the same subnet.
+	query := `WITH changed AS (
+ INSERT INTO task_scope(task_id,kind,company_id,domain,net,value,source,reason)
+ VALUES($1,$2,$3,$4,$5::cidr,$6,$7,NULLIF($8,''))
+ ON CONFLICT(task_id,kind,(COALESCE(domain,'')),(COALESCE(net::text,'')),(COALESCE(company_id,0)),(COALESCE(value,'')))
+ DO UPDATE SET source='manual',reason=EXCLUDED.reason
+ WHERE EXCLUDED.source='manual' AND task_scope.source<>'manual'
+ RETURNING task_id,kind,domain,net,company_id,value,source,reason
+), audit AS (
+ INSERT INTO target_control_events(task_id,actor,action,reason,target_key)
+ SELECT task_id::text,'ARTEX administrator','authorize_scope',COALESCE(reason,''),
+ kind||':'||COALESCE(domain,net::text,company_id::text,value,'') FROM changed WHERE source='manual'
+ RETURNING id
+) SELECT EXISTS(SELECT 1 FROM changed)`
+	var changed bool
+	var err error
 	if s.tx != nil {
-		result, err = s.tx.Exec(query, ts.TaskID, ts.Kind, companyVal, domainVal, netVal, valueVal, src, ts.Reason)
+		err = s.tx.QueryRow(query, ts.TaskID, ts.Kind, companyVal, domainVal, netVal, valueVal, src, ts.Reason).Scan(&changed)
 	} else {
-		result, err = s.db.Exec(query, ts.TaskID, ts.Kind, companyVal, domainVal, netVal, valueVal, src, ts.Reason)
+		err = s.db.QueryRow(query, ts.TaskID, ts.Kind, companyVal, domainVal, netVal, valueVal, src, ts.Reason).Scan(&changed)
 	}
-	if err != nil {
-		return false, err
-	}
-	rows, err := result.RowsAffected()
-	return rows > 0, err
+	return changed, err
 }
 
 func (s *AssetStore) upsertTaskScope(ts TaskScope) error {
