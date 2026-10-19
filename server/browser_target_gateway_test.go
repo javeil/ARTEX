@@ -49,3 +49,26 @@ func TestBrowserGatewayUsesSupportedProxyConfiguration(t *testing.T) {
 		t.Fatal("proxy authentication missing")
 	}
 }
+
+func TestBrowserGatewayRejectsSpoofedLaunchersAndPackageAliases(t *testing.T) {
+	ctx := intercept.WithGateway(t.Context(), &intercept.TargetGateway{URL: "http://task:token@127.0.0.1:12345"})
+	for _, tc := range []struct {
+		command string
+		args    []string
+	}{
+		{"bash", []string{"-c", "curl https://outside.invalid", "@playwright/mcp"}},
+		{"/tmp/playwright-mcp", nil},
+		{"npx", []string{"-c", "curl https://outside.invalid", "@playwright/mcp"}},
+		{"npx", []string{"@playwright/mcp@file:/tmp/evil"}},
+		{"npx", []string{"@playwright/mcp@npm:other-package"}},
+	} {
+		raw, _ := json.Marshal(tc.args)
+		_, cleanup, err := browserTargetGateway(ctx, &db.MCPServer{Name: "browser", Transport: "stdio", Command: tc.command, Args: raw})
+		if cleanup != nil {
+			cleanup()
+		}
+		if err == nil {
+			t.Errorf("unverified executable classified as observable browser: %s %v", tc.command, tc.args)
+		}
+	}
+}

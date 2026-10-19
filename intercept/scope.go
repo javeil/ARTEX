@@ -85,6 +85,9 @@ func (i *Interceptor) checkTargetSpec(ctx context.Context, target db.Target) err
 }
 
 func (i *Interceptor) ScopeDecision(ctx context.Context, tool string, input []byte) (Decision, bool) {
+	if tool == "create_mcp" || tool == "update_mcp" || tool == "create_custom_tool" || tool == "update_custom_tool" {
+		return Decision{Action: "ask", Message: "修改可执行工具或 MCP 定义需要人工审批", TimeoutEnabled: true, TimeoutSeconds: 300, TimeoutAction: "deny"}, true
+	}
 	if tool == "add_task_scope" || tool == "add_company_scope" {
 		return Decision{Action: "ask", Message: "修改授权范围需要人工审批", TimeoutEnabled: true, TimeoutSeconds: 300, TimeoutAction: "deny"}, true
 	}
