@@ -672,11 +672,16 @@ func (i *Interceptor) HandleAsk(ctx context.Context, convID int64, dec Decision,
 	i.bindResult(ctx, pendingID, audit)
 	ch := i.pending.add(pendingID)
 	defer i.pending.remove(pendingID)
-	// Polling clients can decide after INSERT commits but before the channel is
-	// registered. Re-read after registration so that decision cannot be lost;
-	// later decisions will be delivered through ch.
-	if saved, err := i.db.GetInterceptDetail(pendingID); err == nil && saved != nil && saved.Status != "pending" {
-		return saved.Status == "allowed" || (saved.Audit != nil && saved.Audit.EffectiveAction == "allow")
+	// A different server instance may resolve this row without access to ch.
+	resolved := func() (bool, bool) {
+		status, action, err := i.db.InterceptResolution(ctx, pendingID)
+		if err != nil {
+			return true, false
+		}
+		return status != "pending", status == "allowed" || status == "timeout" && action == "allow"
+	}
+	if done, allowed := resolved(); done {
+		return allowed && ctx.Err() == nil
 	}
 
 	detail, _ := json.Marshal(map[string]any{
@@ -699,11 +704,40 @@ func (i *Interceptor) HandleAsk(ctx context.Context, convID int64, dec Decision,
 		taskEmit(activity)
 	}
 
-	if !dec.TimeoutEnabled {
-		// No timeout: wait indefinitely until user decides or worker stops.
+	var timeout <-chan time.Time
+	if dec.TimeoutEnabled {
+		secs := dec.TimeoutSeconds
+		if secs <= 0 {
+			secs = 60
+		}
+		timer := time.NewTimer(time.Duration(secs) * time.Second)
+		defer timer.Stop()
+		timeout = timer.C
+	}
+	poll := time.NewTicker(250 * time.Millisecond)
+	defer poll.Stop()
+	for {
 		select {
 		case allowed := <-ch:
-			return allowed
+			return allowed && ctx.Err() == nil
+		case <-poll.C:
+			if done, allowed := resolved(); done {
+				return allowed && ctx.Err() == nil
+			}
+		case <-timeout:
+			allowed := dec.TimeoutAction == "allow"
+			action := "deny"
+			if allowed {
+				action = "allow"
+			}
+			won, err := i.db.ResolveIntercept(pendingID, "timeout", action, "审批超时，按超时策略处理")
+			if err != nil {
+				return false
+			}
+			if !won {
+				_, allowed = resolved()
+			}
+			return allowed && ctx.Err() == nil
 		case <-ctx.Done():
 			_, _ = i.db.ResolveIntercept(pendingID, "denied", "deny", "工作已取消")
 			_ = i.db.CompleteIntercept(pendingID, audit.RunID, audit.ToolUseID, "not_executed", "执行前工作已取消", false)
@@ -711,35 +745,6 @@ func (i *Interceptor) HandleAsk(ctx context.Context, convID int64, dec Decision,
 		}
 	}
 
-	secs := dec.TimeoutSeconds
-	if secs <= 0 {
-		secs = 60
-	}
-	timer := time.NewTimer(time.Duration(secs) * time.Second)
-	defer timer.Stop()
-	select {
-	case allowed := <-ch:
-		return allowed
-	case <-timer.C:
-		allowed := dec.TimeoutAction == "allow"
-		action := "deny"
-		if allowed {
-			action = "allow"
-		}
-		resolved, err := i.db.ResolveIntercept(pendingID, "timeout", action, "审批超时，按超时策略处理")
-		if err != nil {
-			return false
-		}
-		if !resolved {
-			detail, err := i.db.GetInterceptDetail(pendingID)
-			return err == nil && detail != nil && (detail.Status == "allowed" || (detail.Audit != nil && detail.Audit.EffectiveAction == "allow"))
-		}
-		return allowed
-	case <-ctx.Done():
-		_, _ = i.db.ResolveIntercept(pendingID, "denied", "deny", "工作已取消")
-		_ = i.db.CompleteIntercept(pendingID, audit.RunID, audit.ToolUseID, "not_executed", "执行前工作已取消", false)
-		return false
-	}
 }
 
 var ErrAlreadyDecided = errors.New("审批已处理或不存在，请刷新记录")
