@@ -262,6 +262,9 @@ func ScopeTargets(tool string, input []byte) (hosts []string, unknown bool) {
 			case "sed":
 				local = readOnlySed(args)
 				unknown = unknown || !local
+			case "base64":
+				local = localBase64(args)
+				unknown = unknown || !local
 			default:
 				unknown = true
 			}

@@ -15,6 +15,42 @@ func offlineTrafficTool(tool string) bool {
 
 var sedPrint = regexp.MustCompile(`^(?:(?:[0-9]+|\$)(?:\s*,\s*(?:[0-9]+|\$))?)?p$`)
 
+var base64Width = regexp.MustCompile(`^[0-9]+$`)
+
+// Only static encoding/decoding and local input files are classified here.
+// Execution in another pipeline stage, substitutions, redirections and custom
+// executables still go through the surrounding shell/scope checks.
+func localBase64(args []string) bool {
+	options := true
+	for j := 1; j < len(args); j++ {
+		a := args[j]
+		if !options || !strings.HasPrefix(a, "-") || a == "-" {
+			continue
+		}
+		switch {
+		case a == "--":
+			options = false
+		case a == "-d" || a == "-D" || a == "--decode" || a == "-i" || a == "--ignore-garbage" || a == "--help" || a == "--version":
+		case a == "-w" || a == "--wrap" || a == "-b":
+			j++
+			if j >= len(args) || !base64Width.MatchString(args[j]) {
+				return false
+			}
+		case strings.HasPrefix(a, "--wrap="):
+			if !base64Width.MatchString(strings.TrimPrefix(a, "--wrap=")) {
+				return false
+			}
+		case strings.HasPrefix(a, "-w") || strings.HasPrefix(a, "-b"):
+			if !base64Width.MatchString(a[2:]) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // Deliberately narrow: sed can execute commands and write files. Only static
 // print/range programs are local reads; -i/-f/e/w and dynamic programs stay opaque.
 func readOnlySed(args []string) bool {
