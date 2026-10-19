@@ -16,9 +16,14 @@ type ApprovalBinding struct {
 func (i *Interceptor) BindApproval(ctx context.Context, tool string, input []byte) (ApprovalBinding, error) {
 	b := ApprovalBinding{ExpiresAt: time.Now().Add(5 * time.Minute)}
 	hosts, unknown := ScopeTargets(tool, input)
-	if TaskIDFromContext(ctx) != "" && (len(hosts) > 0 || unknown || tool == "add_task_scope" || tool == "add_company_scope") {
-		if err := i.db.CheckTaskExecution(ctx, TaskIDFromContext(ctx)); err != nil {
-			return b, err
+	if TaskIDFromContext(ctx) != "" {
+		if i.db == nil {
+			return b, fmt.Errorf("授权存储不可用")
+		}
+		if len(hosts) > 0 || unknown || tool == "add_task_scope" || tool == "add_company_scope" {
+			if err := i.db.CheckTaskExecution(ctx, TaskIDFromContext(ctx)); err != nil {
+				return b, err
+			}
 		}
 		var err error
 		b.AuthorizationVersion, err = i.db.AuthorizationVersion(ctx, TaskIDFromContext(ctx))

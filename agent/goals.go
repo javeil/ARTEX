@@ -108,6 +108,10 @@ func DecomposeGoals(ctx context.Context, prov llm.Provider, dataDir, goalText, d
 // letting the caller own provider selection/failover. maxTokens is the profile's
 // per-reply output cap (0 = send none).
 func DecomposeGoalsWithProvider(ctx context.Context, prov llm.Provider, dataDir, goalText, desc string, as *db.AssetStore, ts *db.ExplorationStore, taskID int64, nonStreaming bool, maxTokens int, emit func(db.Activity)) []GoalSpec {
+	ctx, bindErr := bindTaskAgentContext(ctx, taskID, "goals", emit)
+	if bindErr != nil {
+		return nil
+	}
 	if prov == nil {
 		return nil
 	}

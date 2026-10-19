@@ -8,6 +8,7 @@ import (
 	"github.com/Autumn-27/artex/db"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -78,7 +79,7 @@ func RequestOperation(req *http.Request) (Operation, error) {
 	if err != nil {
 		return Operation{}, err
 	}
-	o := Operation{Target: target, Method: req.Method}
+	o := Operation{Target: target, Method: req.Method, ContentType: req.Header.Get("Content-Type")}
 	if req.Body != nil && req.Body != http.NoBody {
 		original := req.Body
 		b, err := io.ReadAll(io.LimitReader(original, (1<<20)+1))
@@ -97,9 +98,9 @@ func RequestOperation(req *http.Request) (Operation, error) {
 	if o.Effect == "" {
 		o.Effect = classifyOperation(o)
 	}
-	if req.Header.Get("Authorization") != "" && (o.Effect == "read" || o.Effect == "unknown_write" || o.Effect == "authenticate") {
+	if (req.Header.Get("Authorization") != "" || req.Header.Get("Cookie") != "") && (o.Effect == "read" || o.Effect == "unknown_write" || o.Effect == "authenticate") {
 		o.Effect = "authenticate"
-		if username, _, ok := req.BasicAuth(); ok && len(req.Header.Values("Authorization")) == 1 {
+		if username, _, ok := req.BasicAuth(); ok && len(req.Header.Values("Authorization")) == 1 && req.Header.Get("Cookie") == "" {
 			o.Account = username
 		} else {
 			o.OpaqueCredential = true
@@ -124,6 +125,26 @@ func (i *Interceptor) AuthorizeRequest(ctx context.Context, req *http.Request) (
 	if err := i.CheckTarget(ctx, req.URL.String()); err != nil {
 		return Operation{}, err
 	}
+	if req.Host != "" && req.Host != req.URL.Host {
+		virtual, err := db.ParseTarget(req.URL.Scheme + "://" + req.Host)
+		physical, physicalErr := db.ParseTarget(req.URL.String())
+		if err != nil || physicalErr != nil {
+			return Operation{}, fmt.Errorf("无效的虚拟主机请求")
+		}
+		if virtual.Host != physical.Host || virtual.Port != physical.Port {
+			// A Host header without a port selects a virtual host on the physical
+			// service; it does not move the TCP connection to the default port.
+			if _, _, e := net.SplitHostPort(req.Host); e != nil {
+				virtual.Port = physical.Port
+			}
+			virtual.Path = physical.Path
+			virtual.URL = req.URL.Scheme + "://" + net.JoinHostPort(virtual.Host, strconv.Itoa(virtual.Port)) + req.URL.RequestURI()
+			if err = i.checkTargetSpec(ctx, virtual); err != nil {
+				return Operation{}, fmt.Errorf("虚拟主机未获任务授权：%w", err)
+			}
+		}
+	}
+
 	o, err := RequestOperation(req)
 	if err != nil {
 		return o, err
@@ -177,7 +198,7 @@ func (i *Interceptor) AuthorizeRequest(ctx context.Context, req *http.Request) (
 // gateway. The request context carries authorization supplied by the host.
 func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response, error) {
 	i, _ := req.Context().Value(scopeContextKey{}).(*Interceptor)
-	if i == nil {
+	if i == nil || i.db == nil {
 		return nil, fmt.Errorf("目标访问校验器不可用，必须绑定授权任务")
 	}
 	leaseCtx, releaseLease, err := i.acquireTargetIO(req.Context(), "http")
@@ -237,13 +258,28 @@ func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response,
 		release = func() { cancelDeadline(); previousRelease() }
 		req = req.Clone(bound)
 	}
-	id, err := i.db.BeginTargetRequest(req.Context(), TaskIDFromContext(req.Context()), op.Target, op.Method, account, p.Budget)
+	networkTransport, cleanupTransport, err := i.checkedTransport(req, base)
 	if err != nil {
 		release()
 		return i.rejectTargetRequest(req, err)
 	}
+	id, err := i.db.BeginTargetRequest(req.Context(), TaskIDFromContext(req.Context()), op.Target, op.Method, account, p.Budget)
+	if err != nil {
+		cleanupTransport()
+		release()
+		return i.rejectTargetRequest(req, err)
+	}
 	started := time.Now()
-	resp, err := base.RoundTrip(req)
+	resp, err := networkTransport.RoundTrip(req)
+	if err != nil {
+		cleanupTransport()
+	} else {
+		if resp.Body == nil {
+			resp.Body = http.NoBody
+		}
+		resp.Body = &transportBody{ReadCloser: resp.Body, cleanup: cleanupTransport}
+	}
+
 	latency := int(time.Since(started).Milliseconds())
 	if err != nil {
 		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(req.Context()), 2*time.Second)

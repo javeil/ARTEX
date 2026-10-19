@@ -23,10 +23,12 @@ func browserTargetGateway(ctx context.Context, m *db.MCPServer) (*db.MCPServer, 
 	}
 	clone := *m
 	args := jsonStrSlice(m.Args)
-	known := filepath.Base(m.Command) == "playwright-mcp"
-	for _, a := range args {
-		known = known || a == "@playwright/mcp" || strings.HasPrefix(a, "@playwright/mcp@")
+	trusted, err := trustedBrowserLauncher(m.Command, args)
+	if err != nil {
+		return nil, nil, err
 	}
+	clone.Command = trusted
+
 	normalized := []string{}
 	for _, a := range args {
 		if strings.HasPrefix(a, "--config=") {
@@ -36,16 +38,14 @@ func browserTargetGateway(ctx context.Context, m *db.MCPServer) (*db.MCPServer, 
 		}
 	}
 	args = normalized
-	if !known {
-		return nil, nil, fmt.Errorf("browser MCP 尚未提供可验证的 Playwright 目标网关适配")
-	}
+
 	kept := []string{}
 	config := map[string]any{}
 	for j := 0; j < len(args); j++ {
 		if strings.HasPrefix(args[j], "--proxy-server=") || strings.HasPrefix(args[j], "--proxy-bypass=") {
 			continue
 		}
-		if args[j] == "--extension" || strings.HasPrefix(args[j], "--cdp-endpoint") || strings.HasPrefix(args[j], "--endpoint") {
+		if strings.HasPrefix(args[j], "--executable-path") || args[j] == "--extension" || strings.HasPrefix(args[j], "--cdp-endpoint") || strings.HasPrefix(args[j], "--endpoint") {
 			return nil, nil, fmt.Errorf("外接浏览器无法证明使用任务目标网关，拒绝启动")
 		}
 		switch args[j] {
@@ -90,7 +90,7 @@ func browserTargetGateway(ctx context.Context, m *db.MCPServer) (*db.MCPServer, 
 	if env == nil {
 		env = map[string]string{}
 	}
-	for _, key := range []string{"PLAYWRIGHT_MCP_PROXY_SERVER", "PLAYWRIGHT_MCP_PROXY_BYPASS", "PLAYWRIGHT_MCP_CDP_ENDPOINT", "PLAYWRIGHT_MCP_EXTENSION"} {
+	for _, key := range []string{"PLAYWRIGHT_MCP_PROXY_SERVER", "PLAYWRIGHT_MCP_PROXY_BYPASS", "PLAYWRIGHT_MCP_CDP_ENDPOINT", "PLAYWRIGHT_MCP_EXTENSION", "NODE_OPTIONS", "NODE_PATH", "NPM_CONFIG_NODE_OPTIONS"} {
 		env[key] = ""
 	}
 	clone.Env, _ = json.Marshal(env)
@@ -107,10 +107,24 @@ func browserTargetGateway(ctx context.Context, m *db.MCPServer) (*db.MCPServer, 
 	if launch == nil {
 		launch = map[string]any{}
 	}
+	if launch["executablePath"] != nil {
+		return nil, nil, fmt.Errorf("browser 自定义可执行文件不能声明为受信任网关适配")
+	}
 	launch["proxy"] = proxy
 	launchArgs := []any{}
 	if old, ok := launch["args"].([]any); ok {
-		launchArgs = append(launchArgs, old...)
+		for _, arg := range old {
+			value, ok := arg.(string)
+			if !ok {
+				return nil, nil, fmt.Errorf("browser launch args 必须是字符串")
+			}
+			for _, prefix := range []string{"--proxy-", "--no-proxy", "--load-extension", "--disable-extensions-except", "--host-resolver", "--remote-debugging"} {
+				if strings.HasPrefix(value, prefix) {
+					return nil, nil, fmt.Errorf("browser launch args 不能覆盖目标网关")
+				}
+			}
+			launchArgs = append(launchArgs, value)
+		}
 	}
 	launch["args"] = append(launchArgs, "--disable-quic", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
 	browser["launchOptions"] = launch

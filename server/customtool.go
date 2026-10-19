@@ -457,7 +457,11 @@ func (s *Server) runHTTPTool(ctx context.Context, execRaw json.RawMessage, param
 		return actool.Errorf(err.Error()), nil
 	}
 	for k, v := range spec.Headers {
-		req.Header.Set(k, renderTemplate(v, params, identity))
+		if strings.EqualFold(k, "Host") {
+			req.Host = renderTemplate(v, params, identity)
+		} else {
+			req.Header.Set(k, renderTemplate(v, params, identity))
+		}
 	}
 	client := &http.Client{Timeout: timeoutOr(spec.TimeoutMs, 30000)}
 	if tr := s.httpProxyTransport(spec); tr != nil {

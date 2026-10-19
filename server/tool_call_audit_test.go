@@ -7,6 +7,7 @@ import (
 	"github.com/Autumn-27/artex/intercept"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/Autumn-27/artex/db"
@@ -52,19 +53,24 @@ func TestGuardDurableAuditForRuleJudgeDefaultAndDisabledTools(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() {
+		defer func() {
 			if exists {
 				_ = pg.SetSetting(key, v)
 			} else {
 				_, _ = pg.Exec(`DELETE FROM settings WHERE key=$1`, key)
 			}
-		})
+		}()
 	}
 	ic := intercept.New(pg)
 	if err := ic.SetEnabledTools([]string{"AuditProbe"}); err != nil {
 		t.Fatal(err)
 	}
-	task := "durable-guard-audit-" + t.Name()
+	fixture, err := pg.CreateTask("durable guard audit", "local probe", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pg.DeleteTask(fixture.ID)
+	task := strconv.FormatInt(fixture.ID, 10)
 	defer pg.Exec(`DELETE FROM tool_call_audit WHERE task_id=$1`, task)
 	defer pg.Exec(`DELETE FROM intercept_pending WHERE task_id=$1`, task)
 	ctx := intercept.WithTaskContext(t.Context(), task, "test-agent", func(a db.Activity) {

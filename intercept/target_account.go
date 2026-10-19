@@ -58,11 +58,16 @@ func operationAccount(p db.TargetPolicy, o Operation) (string, error) {
 				values[key] = append(values[key], v)
 			}
 		}
-	} else if q, e := url.ParseQuery(o.Body); e == nil {
+	} else {
+		q, e := bodyValues(o)
+		if e != nil && (p.Budget.AccountAttempts > 0 || len(p.Accounts) > 0) {
+			return "", fmt.Errorf("无法检查实际登录载荷: %w", e)
+		}
 		for k, v := range q {
 			values[k] = append(values[k], v...)
 		}
 	}
+
 	for _, key := range fields {
 		for _, v := range values[key] {
 			if v != "" {

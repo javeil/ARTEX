@@ -82,3 +82,25 @@ func TestAccountLimitsInspectActualAuthorizationHeadersAndGETLogin(t *testing.T)
 	}
 
 }
+
+func TestMalformedLoginCannotBeReclassifiedAsGenericProbe(t *testing.T) {
+	for _, tc := range []struct{ body, contentType string }{
+		{`{"username":"bob","username":"alice"}`, "application/json"},
+		{"invalid multipart payload", "multipart/form-data; boundary=missing"},
+	} {
+		req, _ := http.NewRequest("POST", "https://example.test/login", strings.NewReader(tc.body))
+		req.Header.Set("Content-Type", tc.contentType)
+		op, err := RequestOperation(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := db.TargetPolicy{Accounts: []string{"alice"}, Budget: db.TargetBudget{AccountAttempts: 2}, Operations: []db.OperationRule{{Target: db.TargetSpec{Host: "example.test"}, Methods: []string{"POST"}, Effect: "probe"}}}
+		op = effectiveOperation(p, op)
+		if op.Effect != "authenticate" {
+			t.Errorf("invalid login payload hidden by generic declaration: %+v", op)
+		}
+		if _, err = operationAccount(p, op); err == nil {
+			t.Error("invalid login bypassed account controls")
+		}
+	}
+}

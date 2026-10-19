@@ -4,7 +4,7 @@ package shellguard
 
 import (
 	"bytes"
-	"encoding/json"
+	"github.com/Autumn-27/artex/internal/shellinput"
 	"path"
 	"regexp"
 	"strings"
@@ -30,16 +30,9 @@ func IsCoreName(name string) bool {
 var forkBomb = regexp.MustCompile(`:\s*\(\s*\)\s*\{[^}]*:\s*\|\s*:`)
 
 func Command(tool string, input []byte) string {
-	var in struct {
-		Command string `json:"command"`
-		Text    string `json:"text"`
-	}
-	_ = json.Unmarshal(input, &in)
 	switch tool {
-	case "Bash", "shell_open":
-		return in.Command
-	case "shell_send":
-		return in.Text
+	case "Bash", "Monitor", "shell_open", "shell_send":
+		return shellinput.Command(tool, input)
 	}
 	return ""
 }

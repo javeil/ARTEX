@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/Autumn-27/artex/internal/shellinput"
 	"io"
 	"os"
 	"path/filepath"
@@ -362,7 +363,7 @@ func knownScriptExtension(path string) bool {
 
 func captureScripts(workingDir, tool string, arguments json.RawMessage) ([]ReviewScript, string) {
 	switch tool {
-	case "Bash", "shell_open", "shell_send", "command", "script":
+	case "Bash", "Monitor", "shell_open", "shell_send", "command", "script":
 	default:
 		return nil, "not_applicable"
 	}
@@ -370,11 +371,7 @@ func captureScripts(workingDir, tool string, arguments json.RawMessage) ([]Revie
 	if json.Unmarshal(arguments, &fields) != nil {
 		return nil, "not_applicable"
 	}
-	key := "command"
-	if tool == "shell_send" {
-		key = "text"
-	}
-	command, _ := fields[key].(string)
+	command := shellinput.Command(tool, arguments)
 	if strings.TrimSpace(command) == "" {
 		for _, candidate := range []string{"script", "code", "cmd"} {
 			if value, ok := fields[candidate].(string); ok {

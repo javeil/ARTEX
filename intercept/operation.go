@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/Autumn-27/artex/internal/shellinput"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -16,6 +17,7 @@ import (
 )
 
 type Operation struct {
+	ContentType      string    `json:"content_type,omitempty"`
 	OpaqueCredential bool      `json:"opaque_credential,omitempty"`
 	BodyTruncated    bool      `json:"body_truncated,omitempty"`
 	ResourceETag     string    `json:"resource_etag,omitempty"`
@@ -68,27 +70,27 @@ func classifyOperation(o Operation) string {
 			}
 		}
 	}
-	var obj map[string]any
-	if json.Unmarshal([]byte(o.Body), &obj) == nil {
-		for k, v := range obj {
-			if s, ok := v.(string); ok {
-				values[strings.ToLower(k)] = s
+	fields, err := bodyValues(o)
+	if err != nil {
+		// An ambiguous login is still account-sensitive. A generic probe route
+		// must not erase identity validation when the actual body is invalid.
+		if authPath.MatchString(o.Target.Path) {
+			return "authenticate"
+		}
+		return "unknown_write"
+	}
+	for key, list := range fields {
+		k := strings.ToLower(key)
+		for _, value := range list {
+			if (k == "action" || k == "operation" || k == "op" || k == "cmd") && mutationValue.MatchString(value) {
+				return "business_write"
 			}
 		}
-	} else if q, e := url.ParseQuery(o.Body); e == nil {
-		for k, v := range q {
-			if k == "action" || k == "operation" || k == "op" || k == "cmd" {
-				for _, value := range v {
-					if mutationValue.MatchString(value) {
-						return "business_write"
-					}
-				}
-			}
-			if len(v) > 0 {
-				values[strings.ToLower(k)] = v[0]
-			}
+		if len(list) > 0 {
+			values[k] = list[0]
 		}
 	}
+
 	for _, key := range []string{"action", "operation", "op", "cmd"} {
 		if mutationValue.MatchString(values[key]) {
 			return "business_write"
@@ -149,10 +151,7 @@ func DescribeOperations(tool string, input []byte) []Operation {
 	if tool != "Bash" && tool != "Monitor" && tool != "shell_open" && tool != "shell_send" {
 		return out
 	}
-	command := in.Command
-	if tool == "shell_send" {
-		command = in.Text
-	}
+	command := shellinput.Command(tool, input)
 	tree, e := syntax.NewParser().Parse(strings.NewReader(command), "operation")
 	if e != nil {
 		return out
@@ -188,6 +187,27 @@ func DescribeOperations(tool string, input []byte) []Operation {
 				method = strings.TrimPrefix(a, "-X")
 			case strings.HasPrefix(a, "--request="):
 				method = strings.TrimPrefix(a, "--request=")
+			case a == "-T" || a == "--upload-file" || strings.HasPrefix(a, "--upload-file=") || strings.HasPrefix(a, "-T"):
+				if !strings.Contains(a, "=") && (a == "-T" || a == "--upload-file") && j+1 < len(args) {
+					j++
+				}
+				method = "PUT"
+			case a == "-F" || a == "--form" || a == "--form-string" || a == "--data-urlencode":
+				if j+1 < len(args) {
+					j++
+					if body != "" {
+						body += "&"
+					}
+					body += args[j]
+				}
+				if method == "GET" {
+					method = "POST"
+				}
+			case strings.HasPrefix(a, "-F") || strings.HasPrefix(a, "--form=") || strings.HasPrefix(a, "--form-string=") || strings.HasPrefix(a, "--data-urlencode="):
+				if method == "GET" {
+					method = "POST"
+				}
+				body = "[opaque form payload]"
 			case a == "-d" || a == "--data" || a == "--data-raw" || a == "--data-binary" || a == "--json" || a == "--post-data":
 				if j+1 < len(args) {
 					j++

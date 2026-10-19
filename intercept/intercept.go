@@ -335,6 +335,7 @@ const (
 // JudgeConfig is the resolved LLM-fallback-judge configuration. Prompt is always
 // non-empty (falls back to DefaultJudgePrompt).
 type JudgeConfig struct {
+	ConfigurationError     string `json:"configuration_error,omitempty"`
 	Enabled                bool   `json:"enabled"`
 	ProfileID              int64  `json:"profile_id"` // 0 = follow active/default
 	Prompt                 string `json:"prompt"`
@@ -351,21 +352,43 @@ type JudgeConfig struct {
 // missing/invalid keys. Read fresh on each fallback judgement — the LLM call that
 // follows dwarfs a few KV reads, and freshness avoids a cache-invalidation path.
 func (i *Interceptor) judgeConfig() JudgeConfig {
-	c := JudgeConfig{
-		Enabled:                i.db.GetBool(settingJudgeEnabled, false),
-		ProfileID:              int64(i.getSettingInt(settingJudgeProfileID, 0)),
-		TimeoutSeconds:         i.getSettingInt(settingJudgeTimeoutSecs, defaultJudgeTimeoutSecs),
-		RetryCount:             min(max(i.getSettingInt(settingJudgeRetryCount, 0), 0), MaxJudgeRetryCount),
-		RetryIntervalMS:        min(max(i.getSettingInt(settingJudgeRetryIntervalMS, defaultJudgeRetryIntervalMS), 0), MaxJudgeRetryIntervalMS),
-		FailAction:             i.getSettingChoice(settingJudgeFailAction, defaultJudgeFailAction, "allow", "ask", "deny"),
-		AskTimeoutSeconds:      i.getSettingInt(settingJudgeAskTimeoutSecs, defaultJudgeAskTimeoutSecs),
-		AskTimeoutAction:       i.getSettingChoice(settingJudgeAskTimeoutAction, defaultJudgeAskTimeoutAction, "allow", "deny"),
-		IncompleteScriptAction: i.getSettingChoice(settingJudgeIncompleteScript, DefaultIncompleteScriptAction, "ask", "model"),
-	}
-	// Prompt: stored value if non-empty, else the built-in template.
-	if v, ok, _ := i.db.GetSetting(settingJudgePrompt); ok && strings.TrimSpace(v) != "" {
-		c.Prompt = v
+	keys := []string{settingJudgeEnabled, settingJudgeProfileID, settingJudgeTimeoutSecs, settingJudgeRetryCount, settingJudgeRetryIntervalMS, settingJudgeFailAction, settingJudgeAskTimeoutSecs, settingJudgeAskTimeoutAction, settingJudgeIncompleteScript, settingJudgePrompt}
+	var values map[string]string
+	var err error
+	if i.db == nil {
+		err = errors.New("授权存储未接入")
 	} else {
+		values, err = i.db.GetSettings(context.Background(), keys)
+	}
+	integer := func(k string, def int) int {
+		v, e := strconv.Atoi(strings.TrimSpace(values[k]))
+		if e != nil {
+			return def
+		}
+		return v
+	}
+	choice := func(k, def string, allowed ...string) string {
+		v := strings.TrimSpace(values[k])
+		for _, a := range allowed {
+			if v == a {
+				return a
+			}
+		}
+		return def
+	}
+	c := JudgeConfig{
+		Enabled:                values[settingJudgeEnabled] == "true" || values[settingJudgeEnabled] == "1",
+		ProfileID:              int64(integer(settingJudgeProfileID, 0)),
+		TimeoutSeconds:         integer(settingJudgeTimeoutSecs, defaultJudgeTimeoutSecs),
+		RetryCount:             min(max(integer(settingJudgeRetryCount, 0), 0), MaxJudgeRetryCount),
+		RetryIntervalMS:        min(max(integer(settingJudgeRetryIntervalMS, defaultJudgeRetryIntervalMS), 0), MaxJudgeRetryIntervalMS),
+		FailAction:             choice(settingJudgeFailAction, defaultJudgeFailAction, "allow", "ask", "deny"),
+		AskTimeoutSeconds:      integer(settingJudgeAskTimeoutSecs, defaultJudgeAskTimeoutSecs),
+		AskTimeoutAction:       choice(settingJudgeAskTimeoutAction, defaultJudgeAskTimeoutAction, "allow", "deny"),
+		IncompleteScriptAction: choice(settingJudgeIncompleteScript, DefaultIncompleteScriptAction, "ask", "model"),
+		Prompt:                 values[settingJudgePrompt],
+	}
+	if strings.TrimSpace(c.Prompt) == "" {
 		c.Prompt = DefaultJudgePrompt
 	}
 	if c.TimeoutSeconds <= 0 {
@@ -373,6 +396,12 @@ func (i *Interceptor) judgeConfig() JudgeConfig {
 	}
 	if c.AskTimeoutSeconds <= 0 {
 		c.AskTimeoutSeconds = defaultJudgeAskTimeoutSecs
+	}
+	if err != nil {
+		c.ConfigurationError = err.Error()
+		c.Enabled = true
+		c.FailAction = "ask"
+		c.AskTimeoutAction = "deny"
 	}
 	return c
 }
@@ -413,43 +442,15 @@ func (i *Interceptor) SetJudgeConfig(c JudgeConfig) error {
 	if err := c.ValidateRetry(); err != nil {
 		return err
 	}
-	if err := i.db.SetBool(settingJudgeEnabled, c.Enabled); err != nil {
-		return err
-	}
-	if err := i.db.SetSetting(settingJudgeProfileID, strconv.FormatInt(c.ProfileID, 10)); err != nil {
-		return err
-	}
-	// Store the prompt only when it differs from the built-in template, so version
-	// updates to DefaultJudgePrompt flow through for users who never customized it.
-	promptToStore := ""
+	prompt := ""
 	if strings.TrimSpace(c.Prompt) != "" && strings.TrimSpace(c.Prompt) != strings.TrimSpace(DefaultJudgePrompt) {
-		promptToStore = c.Prompt
+		prompt = c.Prompt
 	}
-	if err := i.db.SetSetting(settingJudgePrompt, promptToStore); err != nil {
-		return err
-	}
-	if err := i.db.SetSetting(settingJudgeTimeoutSecs, strconv.Itoa(c.TimeoutSeconds)); err != nil {
-		return err
-	}
-	if err := i.db.SetSetting(settingJudgeRetryCount, strconv.Itoa(c.RetryCount)); err != nil {
-		return err
-	}
-	if err := i.db.SetSetting(settingJudgeRetryIntervalMS, strconv.Itoa(c.RetryIntervalMS)); err != nil {
-		return err
-	}
-	if err := i.db.SetSetting(settingJudgeFailAction, c.FailAction); err != nil {
-		return err
-	}
-	if err := i.db.SetSetting(settingJudgeAskTimeoutSecs, strconv.Itoa(c.AskTimeoutSeconds)); err != nil {
-		return err
-	}
-	if err := i.db.SetSetting(settingJudgeAskTimeoutAction, c.AskTimeoutAction); err != nil {
-		return err
-	}
-	if err := i.db.SetSetting(settingJudgeIncompleteScript, c.IncompleteScriptAction); err != nil {
-		return err
-	}
-	return nil
+	return i.db.SetSettingsContext(context.Background(), map[string]string{
+		settingJudgeEnabled: strconv.FormatBool(c.Enabled), settingJudgeProfileID: strconv.FormatInt(c.ProfileID, 10), settingJudgePrompt: prompt,
+		settingJudgeTimeoutSecs: strconv.Itoa(c.TimeoutSeconds), settingJudgeRetryCount: strconv.Itoa(c.RetryCount), settingJudgeRetryIntervalMS: strconv.Itoa(c.RetryIntervalMS),
+		settingJudgeFailAction: c.FailAction, settingJudgeAskTimeoutSecs: strconv.Itoa(c.AskTimeoutSeconds), settingJudgeAskTimeoutAction: c.AskTimeoutAction, settingJudgeIncompleteScript: c.IncompleteScriptAction,
+	})
 }
 
 // Judge runs the LLM fallback judge for a tool call that matched no rule. It
@@ -461,6 +462,9 @@ func (i *Interceptor) SetJudgeConfig(c JudgeConfig) error {
 // timeout so the existing HandleAsk consumes them unchanged.
 func (i *Interceptor) Judge(ctx context.Context, tool string, arguments json.RawMessage) (Decision, bool) {
 	cfg := i.judgeConfig()
+	if cfg.ConfigurationError != "" {
+		return Decision{Action: "ask", ModelFallback: true, Message: "无法读取判定器配置，需要人工审批", TimeoutEnabled: true, TimeoutSeconds: defaultJudgeAskTimeoutSecs, TimeoutAction: "deny"}, true
+	}
 	i.mu.RLock()
 	rv := i.reviewer
 	i.mu.RUnlock()
@@ -668,11 +672,16 @@ func (i *Interceptor) HandleAsk(ctx context.Context, convID int64, dec Decision,
 	i.bindResult(ctx, pendingID, audit)
 	ch := i.pending.add(pendingID)
 	defer i.pending.remove(pendingID)
-	// Polling clients can decide after INSERT commits but before the channel is
-	// registered. Re-read after registration so that decision cannot be lost;
-	// later decisions will be delivered through ch.
-	if saved, err := i.db.GetInterceptDetail(pendingID); err == nil && saved != nil && saved.Status != "pending" {
-		return saved.Status == "allowed" || (saved.Audit != nil && saved.Audit.EffectiveAction == "allow")
+	// A different server instance may resolve this row without access to ch.
+	resolved := func() (bool, bool) {
+		status, action, err := i.db.InterceptResolution(ctx, pendingID)
+		if err != nil {
+			return true, false
+		}
+		return status != "pending", status == "allowed" || status == "timeout" && action == "allow"
+	}
+	if done, allowed := resolved(); done {
+		return allowed && ctx.Err() == nil
 	}
 
 	detail, _ := json.Marshal(map[string]any{
@@ -695,11 +704,40 @@ func (i *Interceptor) HandleAsk(ctx context.Context, convID int64, dec Decision,
 		taskEmit(activity)
 	}
 
-	if !dec.TimeoutEnabled {
-		// No timeout: wait indefinitely until user decides or worker stops.
+	var timeout <-chan time.Time
+	if dec.TimeoutEnabled {
+		secs := dec.TimeoutSeconds
+		if secs <= 0 {
+			secs = 60
+		}
+		timer := time.NewTimer(time.Duration(secs) * time.Second)
+		defer timer.Stop()
+		timeout = timer.C
+	}
+	poll := time.NewTicker(250 * time.Millisecond)
+	defer poll.Stop()
+	for {
 		select {
 		case allowed := <-ch:
-			return allowed
+			return allowed && ctx.Err() == nil
+		case <-poll.C:
+			if done, allowed := resolved(); done {
+				return allowed && ctx.Err() == nil
+			}
+		case <-timeout:
+			allowed := dec.TimeoutAction == "allow"
+			action := "deny"
+			if allowed {
+				action = "allow"
+			}
+			won, err := i.db.ResolveIntercept(pendingID, "timeout", action, "审批超时，按超时策略处理")
+			if err != nil {
+				return false
+			}
+			if !won {
+				_, allowed = resolved()
+			}
+			return allowed && ctx.Err() == nil
 		case <-ctx.Done():
 			_, _ = i.db.ResolveIntercept(pendingID, "denied", "deny", "工作已取消")
 			_ = i.db.CompleteIntercept(pendingID, audit.RunID, audit.ToolUseID, "not_executed", "执行前工作已取消", false)
@@ -707,35 +745,6 @@ func (i *Interceptor) HandleAsk(ctx context.Context, convID int64, dec Decision,
 		}
 	}
 
-	secs := dec.TimeoutSeconds
-	if secs <= 0 {
-		secs = 60
-	}
-	timer := time.NewTimer(time.Duration(secs) * time.Second)
-	defer timer.Stop()
-	select {
-	case allowed := <-ch:
-		return allowed
-	case <-timer.C:
-		allowed := dec.TimeoutAction == "allow"
-		action := "deny"
-		if allowed {
-			action = "allow"
-		}
-		resolved, err := i.db.ResolveIntercept(pendingID, "timeout", action, "审批超时，按超时策略处理")
-		if err != nil {
-			return false
-		}
-		if !resolved {
-			detail, err := i.db.GetInterceptDetail(pendingID)
-			return err == nil && detail != nil && (detail.Status == "allowed" || (detail.Audit != nil && detail.Audit.EffectiveAction == "allow"))
-		}
-		return allowed
-	case <-ctx.Done():
-		_, _ = i.db.ResolveIntercept(pendingID, "denied", "deny", "工作已取消")
-		_ = i.db.CompleteIntercept(pendingID, audit.RunID, audit.ToolUseID, "not_executed", "执行前工作已取消", false)
-		return false
-	}
 }
 
 var ErrAlreadyDecided = errors.New("审批已处理或不存在，请刷新记录")

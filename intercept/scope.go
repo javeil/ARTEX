@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/Autumn-27/artex/internal/shellinput"
 	"net/netip"
 	"net/url"
 	"path/filepath"
@@ -44,6 +45,9 @@ func CheckURL(ctx context.Context, raw string) error {
 }
 
 func (i *Interceptor) CheckTarget(ctx context.Context, raw string) error {
+	if i == nil || i.db == nil {
+		return fmt.Errorf("目标授权存储不可用")
+	}
 	target, err := db.ParseTarget(raw)
 	if err != nil {
 		return err
@@ -81,6 +85,9 @@ func (i *Interceptor) checkTargetSpec(ctx context.Context, target db.Target) err
 }
 
 func (i *Interceptor) ScopeDecision(ctx context.Context, tool string, input []byte) (Decision, bool) {
+	if tool == "create_mcp" || tool == "update_mcp" || tool == "create_custom_tool" || tool == "update_custom_tool" {
+		return Decision{Action: "ask", Message: "修改可执行工具或 MCP 定义需要人工审批", TimeoutEnabled: true, TimeoutSeconds: 300, TimeoutAction: "deny"}, true
+	}
 	if tool == "add_task_scope" || tool == "add_company_scope" {
 		return Decision{Action: "ask", Message: "修改授权范围需要人工审批", TimeoutEnabled: true, TimeoutSeconds: 300, TimeoutAction: "deny"}, true
 	}
@@ -92,6 +99,14 @@ func (i *Interceptor) ScopeDecision(ctx context.Context, tool string, input []by
 		return Decision{}, false
 	}
 	hosts, unknown := ScopeTargets(tool, input)
+	if len(hosts) > 0 || unknown {
+		if i.db == nil {
+			return Decision{Action: "deny", Message: "授权存储不可用"}, true
+		}
+		if err := i.db.CheckTaskExecution(ctx, TaskIDFromContext(ctx)); err != nil {
+			return Decision{Action: "deny", Message: "目标不在本任务授权范围：" + err.Error()}, true
+		}
+	}
 	if (len(hosts) > 0 || unknown) && i.TargetIOState(TaskIDFromContext(ctx)).Blocked {
 		return Decision{Action: "deny", Message: "目标访问已停止，需用户明确恢复"}, true
 	}
@@ -115,7 +130,7 @@ func (i *Interceptor) ScopeDecision(ctx context.Context, tool string, input []by
 		if len(policy.Unconfirmed) > 0 {
 			return Decision{Action: "deny", Message: "人工操作约束尚未确认落实到可执行策略"}, true
 		}
-		strict := policy.Policy.Mode != "standard" || len(policy.Policy.Targets) > 0 || len(policy.Policy.DeniedEffects) > 0 || len(policy.Policy.Accounts) > 0 || policy.Policy.Budget != (db.TargetBudget{})
+		strict := policy.Policy.Mode != "standard" || len(policy.Policy.Targets) > 0 || len(policy.Policy.DeniedEffects) > 0 || len(policy.Policy.Accounts) > 0 || policy.Policy.Budget != (db.TargetBudget{}) || policy.Policy.StartsAt != nil || policy.Policy.ExpiresAt != nil || len(policy.HumanConstraints) > 0
 		requiresObservation := len(policy.Policy.Accounts) > 0 || policy.Policy.Budget != (db.TargetBudget{})
 		observable := observableHTTPCall(tool, input) || GatewayMCPObservable(ctx, tool)
 		if requiresObservation && !observable {
@@ -176,12 +191,13 @@ func ScopeTargets(tool string, input []byte) (hosts []string, unknown bool) {
 	}
 	switch tool {
 	case "Bash", "Monitor", "shell_open", "shell_send":
-		var command string
-		key := "command"
-		if tool == "shell_send" {
-			key = "text"
+		for _, target := range parameterTargets(in["params"]) {
+			add(target)
 		}
-		_ = json.Unmarshal(in[key], &command)
+		surface := shellinput.Read(tool, input)
+		command := surface.Command
+		unknown = surface.Interactive || surface.Err != nil
+
 		tree, err := syntax.NewParser().Parse(strings.NewReader(command), "scope")
 		if err != nil {
 			return nil, true
@@ -196,6 +212,9 @@ func ScopeTargets(tool string, input []byte) (hosts []string, unknown bool) {
 					unknown = true
 				}
 				return true
+			}
+			if len(call.Assigns) > 0 {
+				unknown = true
 			}
 			args := []string{}
 			for _, w := range call.Args {
@@ -360,6 +379,13 @@ func ScopeTargetDetails(tool string, input []byte, hosts []string) []string {
 	_ = json.Unmarshal(input, &obj)
 	values := []string{}
 	covered := map[string]bool{}
+	for _, target := range parameterTargets(obj["params"]) {
+		values = append(values, target)
+		if u, e := url.Parse(target); e == nil && u.Hostname() != "" {
+			covered[db.NormalizeScopeHost(u.Hostname())] = true
+		}
+	}
+
 	if strings.EqualFold(tool, "WebFetch") || (tool == "TargetRequest" || tool == "TargetHTTP") {
 		var v string
 		_ = json.Unmarshal(obj["url"], &v)
@@ -369,12 +395,7 @@ func ScopeTargetDetails(tool string, input []byte, hosts []string) []string {
 		}
 	}
 	if tool == "Bash" || tool == "Monitor" || tool == "shell_open" || tool == "shell_send" {
-		field := "command"
-		if tool == "shell_send" {
-			field = "text"
-		}
-		var cmd string
-		_ = json.Unmarshal(obj[field], &cmd)
+		cmd := shellinput.Command(tool, input)
 		for _, raw := range scopeURL.FindAllString(cmd, -1) {
 			if u, e := url.Parse(raw); e == nil && u.Hostname() != "" {
 				values = append(values, raw)
@@ -423,6 +444,19 @@ func observableHTTPCall(tool string, input []byte) bool {
 		}
 		switch filepath.Base(name) {
 		case "curl", "wget":
+			args := []string{filepath.Base(name)}
+			for _, word := range c.Args[1:] {
+				arg, known := operationWord(word)
+				if !known {
+					ok = false
+					return false
+				}
+				args = append(args, arg)
+			}
+			if validateHTTPClientArgs(filepath.Base(name), args) != nil {
+				ok = false
+				return false
+			}
 			found = true
 		default:
 			ok = false
@@ -430,4 +464,10 @@ func observableHTTPCall(tool string, input []byte) bool {
 		return true
 	})
 	return ok && found
+}
+
+// FromContext returns the host-installed interceptor, never model-supplied input.
+func FromContext(ctx context.Context) *Interceptor {
+	i, _ := ctx.Value(scopeContextKey{}).(*Interceptor)
+	return i
 }

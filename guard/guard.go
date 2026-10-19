@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/internal/shellinput"
 	"regexp"
 	"sync"
 	"time"
@@ -88,21 +89,16 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) (result hook.Resu
 		return hook.Result{Decision: "block", Message: systemBlockMessage(err.Error())}
 	}
 	ev.ToolName, ev.Input = tool, input
-	// Extract the executable shell surface for immutable protections and auditing.
-	var cmd string
+	// Decode every terminal representation before immutable checks.
+	cmd := ""
 	switch ev.ToolName {
-	case "Bash", "Monitor", "shell_open":
-		var in struct {
-			Command string `json:"command"`
+	case "Bash", "Monitor", "shell_open", "shell_send":
+		surface := shellinput.Read(ev.ToolName, ev.Input)
+		if surface.Err != nil {
+			setAudit(ctx, "scope", "deny", surface.Err.Error())
+			return g.block(ev.ToolName, systemBlockMessage(surface.Err.Error()), surface.Command)
 		}
-		_ = json.Unmarshal(ev.Input, &in)
-		cmd = in.Command
-	case "shell_send":
-		var in struct {
-			Text string `json:"text"`
-		}
-		_ = json.Unmarshal(ev.Input, &in)
-		cmd = in.Text
+		cmd = surface.Command
 	}
 
 	if reason := shellguard.Check(cmd); reason != "" && !(reason == "递归强制删除" && shellguard.SafeWorkspaceRemoval(cmd, intercept.TaskWorkspace(ctx))) {
@@ -137,6 +133,7 @@ func (g *Guard) preToolUse(ctx context.Context, ev hook.Event) (result hook.Resu
 	if g.interceptor != nil {
 		updated, err := g.interceptor.PrepareShellInput(ctx, ev.ToolName, ev.Input)
 		if err != nil {
+			setAudit(ctx, "scope", "deny", err.Error())
 			return g.block(ev.ToolName, systemBlockMessage(err.Error()), cmd)
 		}
 		if len(updated) > 0 {

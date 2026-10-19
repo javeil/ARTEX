@@ -154,6 +154,7 @@ export function TargetControlPanel({ taskId }: { taskId: string }) {
         </div>
         {monitorError && <p className="text-destructive text-sm">{monitorError}</p>}
         {error && <p className="text-sm text-destructive">{error}</p>}
+        {policy?.restore_review_required && <p className="text-destructive text-sm">此任务由归档恢复，主动访问已阻止。请核对授权范围、排除规则与预算，再保存用户确认的策略。</p>}
         {policy && (
           <details>
             <summary className="cursor-pointer text-sm font-medium">编辑本任务授权策略</summary>

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/Autumn-27/artex/internal/shellinput"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -25,15 +26,19 @@ func shellLiteral(v string) *syntax.Word {
 // not replace authorization after PreToolUse inspected the original command.
 func (i *Interceptor) PrepareShellInput(ctx context.Context, tool string, input []byte) ([]byte, error) {
 	g := GatewayFromContext(ctx)
-	if g == nil || !(tool == "Bash" || tool == "Monitor" || tool == "shell_open") {
+	if g == nil || !(tool == "Bash" || tool == "Monitor" || tool == "shell_open" || tool == "shell_send") {
 		return nil, nil
 	}
 	var in map[string]json.RawMessage
 	if err := json.Unmarshal(input, &in); err != nil {
 		return nil, err
 	}
-	var command string
-	_ = json.Unmarshal(in["command"], &command)
+	surface := shellinput.Read(tool, input)
+	if surface.Err != nil {
+		return nil, surface.Err
+	}
+	command := surface.Command
+
 	tree, err := syntax.NewParser().Parse(strings.NewReader(command), "target-gateway")
 	if err != nil {
 		return nil, err
@@ -72,15 +77,18 @@ func (i *Interceptor) PrepareShellInput(ctx context.Context, tool string, input 
 			}
 		}
 		c.Args[0] = shellLiteral(trustedPath)
+		args := []string{name}
 		for _, w := range c.Args[1:] {
 			arg, known := operationWord(w)
 			if !known {
-				continue
-			}
-			if strings.HasPrefix(arg, "--proxy") || strings.HasPrefix(arg, "--noproxy") || strings.HasPrefix(arg, "--socks") || strings.HasPrefix(arg, "--config") || strings.HasPrefix(arg, "--connect-to") || strings.HasPrefix(arg, "--resolve") || arg == "--next" || arg == "-e" || strings.HasPrefix(arg, "--execute") || strings.HasPrefix(arg, "-K") || strings.HasPrefix(arg, "-x") {
-				problem = fmt.Errorf("目标访问不允许覆盖网关、目标映射或外部客户端配置，请使用任务 HTTP 工具")
+				problem = fmt.Errorf("HTTP 客户端含动态参数，无法证明网关约束，请用 TargetHTTP 传入明确请求")
 				return false
 			}
+			args = append(args, arg)
+		}
+		if err := validateHTTPClientArgs(name, args); err != nil {
+			problem = err
+			return false
 		}
 		prefix := []*syntax.Word{c.Args[0]}
 		suffix := []*syntax.Word{}
@@ -91,7 +99,7 @@ func (i *Interceptor) PrepareShellInput(ctx context.Context, tool string, input 
 			}
 		} else {
 			prefix = append(prefix, shellLiteral("--no-config"))
-			for _, v := range []string{"-e", "use_proxy=yes", "-e", "http_proxy=" + g.URL, "-e", "https_proxy=" + g.URL, "-e", "no_proxy="} {
+			for _, v := range []string{"-e", "use_proxy=yes", "-e", "http_proxy=" + g.URL, "-e", "https_proxy=" + g.URL, "-e", "ftp_proxy=" + g.URL, "-e", "no_proxy="} {
 				suffix = append(suffix, shellLiteral(v))
 			}
 		}
@@ -102,14 +110,34 @@ func (i *Interceptor) PrepareShellInput(ctx context.Context, tool string, input 
 	if problem != nil {
 		return nil, problem
 	}
+	if tool == "Monitor" {
+		// norma 0.4.3 Monitor.Spawn omits tc.Env. Install the host-owned task
+		// environment in the launched shell itself, without changing the dependency.
+		export := &syntax.CallExpr{Args: []*syntax.Word{shellLiteral("export")}}
+		env := []string{"HTTP_PROXY=" + g.URL, "HTTPS_PROXY=" + g.URL, "ALL_PROXY=" + g.URL, "http_proxy=" + g.URL, "https_proxy=" + g.URL, "all_proxy=" + g.URL, "NO_PROXY=", "no_proxy=", "NODE_USE_ENV_PROXY=1", "CURL_HOME=", "WGETRC=/dev/null"}
+		if g.CACert != "" {
+			for _, key := range []string{"SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS"} {
+				env = append(env, key+"="+g.CACert)
+			}
+		}
+		for _, value := range env {
+			export.Args = append(export.Args, shellLiteral(value))
+		}
+		tree.Stmts = append([]*syntax.Stmt{{Cmd: export}}, tree.Stmts...)
+		changed = true
+	}
 	if !changed {
 		return nil, nil
 	}
+	if surface.Field == "" {
+		return nil, fmt.Errorf("复合终端输入不能可靠重写，请使用完整 text 或 paste 命令")
+	}
+
 	var b bytes.Buffer
 	if err := syntax.NewPrinter().Print(&b, tree); err != nil {
 		return nil, err
 	}
-	in["command"], _ = json.Marshal(b.String())
+	in[surface.Field], _ = json.Marshal(b.String())
 	return json.Marshal(in)
 }
 func RewriteForwardedInput(tool string, original, updated []byte) ([]byte, error) {

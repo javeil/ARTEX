@@ -92,6 +92,8 @@ WHERE relation.source_task_id=$1 LIMIT 1`, taskID).Scan(&dependent)
 		{`DELETE FROM task_asset_links WHERE task_id=$1`, []any{taskID}},
 		{`DELETE FROM task_llm_profiles WHERE task_id=$1`, []any{taskID}},
 		{`DELETE FROM task_scope WHERE task_id=$1`, []any{taskID}},
+		{`DELETE FROM task_target_policies WHERE task_id=$1`, []any{taskID}},
+		{`DELETE FROM task_intercept_rules WHERE task_id=$1`, []any{taskID}},
 		{`DELETE FROM task_constraints WHERE exploration_id=$1`, []any{expID}},
 		{`DELETE FROM activity WHERE exploration_id=$1`, []any{expID}},
 		{`DELETE FROM exploration_nodes WHERE exploration_id=$1`, []any{expID}},
@@ -262,6 +264,10 @@ WHERE archive.id=$1 FOR UPDATE OF archive,task`, archiveID).Scan(&taskID, &expID
 	} else {
 		warnings = append(warnings, warning...)
 	}
+	if err := restoreArchiveTargetPolicy(tx, taskID, remappedTables); err != nil {
+		return nil, fmt.Errorf("restore task authorization: %w", err)
+	}
+	warnings = append(warnings, "恢复的任务授权需在目标行为控制中由用户重新确认后才能访问目标")
 	if warning, err := restoreTaskLLMProfiles(tx, remappedTables["task_llm_profiles"]); err != nil {
 		return nil, err
 	} else {

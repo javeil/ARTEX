@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -125,4 +126,11 @@ func (d *DB) CompleteIntercept(id int64, runID, toolUseID, status, output string
 		AND audit->>'effective_action'='allow' AND audit->>'execution_status'='awaiting_result'`,
 		id, runID, toolUseID, patch)
 	return err
+}
+
+// InterceptResolution omits payloads and model transcripts for cheap polling by
+// waiters in another process. The row remains the shared source of truth.
+func (d *DB) InterceptResolution(ctx context.Context, id int64) (status, action string, err error) {
+	err = d.QueryRowContext(ctx, `SELECT status,COALESCE(audit->>'effective_action','') FROM intercept_pending WHERE id=$1`, id).Scan(&status, &action)
+	return
 }
