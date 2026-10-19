@@ -130,6 +130,12 @@ func (i *Interceptor) ScopeDecision(ctx context.Context, tool string, input []by
 		if len(policy.Unconfirmed) > 0 {
 			return Decision{Action: "deny", Message: "人工操作约束尚未确认落实到可执行策略"}, true
 		}
+		// Do not request a human approval for a client argv that the mandatory
+		// gateway rewriter would reject after approval. No command is executed and
+		// no target is contacted by this compatibility check.
+		if _, err := i.PrepareShellInput(ctx, tool, input); err != nil {
+			return Decision{Action: "deny", Message: err.Error()}, true
+		}
 		strict := policy.Policy.Mode != "standard" || len(policy.Policy.Targets) > 0 || len(policy.Policy.DeniedEffects) > 0 || len(policy.Policy.Accounts) > 0 || policy.Policy.Budget != (db.TargetBudget{}) || policy.Policy.StartsAt != nil || policy.Policy.ExpiresAt != nil || len(policy.HumanConstraints) > 0
 		requiresObservation := len(policy.Policy.Accounts) > 0 || policy.Policy.Budget != (db.TargetBudget{})
 		observable := observableHTTPCall(tool, input) || GatewayMCPObservable(ctx, tool)
