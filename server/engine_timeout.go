@@ -248,6 +248,11 @@ func (e *Engine) runFinalPlannerRound(ctx context.Context, t *Task) (met bool) {
 	}
 	// 独立 ctx(不挂 execCancel,避免 pause/硬 cancel 打断这最后一轮),带 Final 注入任务超时词。
 	fctx := e.clockCtx(ctx, t, true)
+	// The independent final round still needs the production guard and durable
+	// audit. This does not resume target I/O or remove the task's deadline.
+	if e.m != nil && e.m.interceptor != nil {
+		fctx = e.m.interceptor.WithScope(fctx)
+	}
 	if !e.beginTaskOperation(t.ID) {
 		return false
 	}
