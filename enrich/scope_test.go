@@ -2,10 +2,13 @@ package enrich
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strconv"
 	"sync/atomic"
@@ -27,15 +30,8 @@ func TestUnboundBackgroundEnrichmentDoesNotContactTargets(t *testing.T) {
 }
 
 func TestTaskBoundEnrichmentHonorsBudgetScopeAndStop(t *testing.T) {
-	dsn := os.Getenv("ARTEX_PG_DSN")
-	if dsn == "" {
-		t.Skip("isolated PG required")
-	}
-	pg, err := db.Open(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pg.Close()
+	pg := isolatedEnrichmentDB(t)
+	var err error
 	task, err := pg.CreateTask("enrichment control regression", "mock", nil, 0, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -96,15 +92,8 @@ func TestTaskBoundEnrichmentHonorsBudgetScopeAndStop(t *testing.T) {
 }
 
 func TestEnrichmentInFlightIsCancelledBeforeStopConfirmation(t *testing.T) {
-	dsn := os.Getenv("ARTEX_PG_DSN")
-	if dsn == "" {
-		t.Skip("isolated PG required")
-	}
-	pg, err := db.Open(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pg.Close()
+	pg := isolatedEnrichmentDB(t)
+	var err error
 	task, err := pg.CreateTask("enrich cancellation", "mock", nil, 0, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -138,4 +127,44 @@ func TestEnrichmentInFlightIsCancelledBeforeStopConfirmation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("remote request remained alive after stopped confirmation")
 	}
+}
+
+// These tests hold a queued authorization version. Other package tests edit
+// global rules, which must invalidate that version in production. Isolate the
+// fixture instead of relaxing the real authorization check to make tests pass.
+func isolatedEnrichmentDB(t *testing.T) *db.DB {
+	t.Helper()
+	dsn := os.Getenv("ARTEX_PG_DSN")
+	if dsn == "" {
+		t.Skip("isolated PG required")
+	}
+	u, err := url.Parse(dsn)
+	if err != nil || u.Host == "" {
+		t.Fatal("test DSN must be a PostgreSQL URL")
+	}
+	admin, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := fmt.Sprintf("artex_enrich_%d_%d", os.Getpid(), time.Now().UnixNano())
+	if _, err = admin.Exec(`CREATE SCHEMA ` + schema); err != nil {
+		admin.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, err := admin.Exec(`DROP SCHEMA ` + schema + ` CASCADE`)
+		admin.Close()
+		if err != nil {
+			t.Error(err)
+		}
+	})
+	q := u.Query()
+	q.Set("search_path", schema)
+	u.RawQuery = q.Encode()
+	pg, err := db.Open(u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pg.Close() })
+	return pg
 }
