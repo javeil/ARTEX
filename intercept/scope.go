@@ -177,6 +177,9 @@ func ScopeTargets(tool string, input []byte) (hosts []string, unknown bool) {
 	}
 	switch tool {
 	case "Bash", "Monitor", "shell_open", "shell_send":
+		for _, target := range parameterTargets(in["params"]) {
+			add(target)
+		}
 		surface := shellinput.Read(tool, input)
 		command := surface.Command
 		unknown = surface.Interactive || surface.Err != nil
@@ -362,6 +365,13 @@ func ScopeTargetDetails(tool string, input []byte, hosts []string) []string {
 	_ = json.Unmarshal(input, &obj)
 	values := []string{}
 	covered := map[string]bool{}
+	for _, target := range parameterTargets(obj["params"]) {
+		values = append(values, target)
+		if u, e := url.Parse(target); e == nil && u.Hostname() != "" {
+			covered[db.NormalizeScopeHost(u.Hostname())] = true
+		}
+	}
+
 	if strings.EqualFold(tool, "WebFetch") || (tool == "TargetRequest" || tool == "TargetHTTP") {
 		var v string
 		_ = json.Unmarshal(obj["url"], &v)
