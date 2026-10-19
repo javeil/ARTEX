@@ -353,6 +353,10 @@ func plannerSystem(goal, dataDir, workDir string) string {
 // for time/heartbeat wakes). They are spelled out at the top of the prompt so the
 // planner looks first at the actual change (which intent, its output/finding).
 func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts *db.ExplorationStore, goal string, triggers []TriggerEvent, emit func(db.Activity)) (met bool, reason string, err error) {
+	ctx, bindErr := bindTaskAgentContext(ctx, taskID, "planner", emit)
+	if bindErr != nil {
+		return false, "", bindErr
+	}
 	// cold-digest §2.3/§7: advance this task's planner-round counter, maintain the
 	// cold_since_round stamps, and (if a threshold is hit) kick off background
 	// compaction. Synchronous part is cheap (a few queries); the LLM compaction

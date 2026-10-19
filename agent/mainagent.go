@@ -110,6 +110,10 @@ func mainAgentSystem(goal, dataDir, workDir string) string {
 // text / result) so the main-agent session shows its work — exactly like the
 // worker/planner sessions — not just the final answer.
 func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.AssetStore, ts *db.ExplorationStore, goal, message string, emit func(db.Activity), notify, resume func(), notifyGoal, notifyHint func([]string)) (string, error) {
+	ctx, bindErr := bindTaskAgentContext(ctx, taskID, "mainagent", emit)
+	if bindErr != nil {
+		return "", bindErr
+	}
 	tsx := NewToolSet(ts, "human")
 	tsx.SetFindingRecorder(m.findingRecorder)
 	if as != nil {
@@ -189,7 +193,7 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 	}
 	enableNoa(&opts, m.noaEnabledFn, m.workDir, noaSession, noaWarn(noaSession))
 	ctx = attachSideCapture(ctx, &opts)
-	s := newScopedSession(opts)
+	s := newScopedSession(ctx, opts)
 	defer s.Close()
 	// reload the prior conversation from the transcript so the agent has context
 	// across turns (each Chat is a fresh session; without this it can't see earlier

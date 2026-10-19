@@ -431,3 +431,9 @@ func observableHTTPCall(tool string, input []byte) bool {
 	})
 	return ok && found
 }
+
+// FromContext returns the host-installed interceptor, never model-supplied input.
+func FromContext(ctx context.Context) *Interceptor {
+	i, _ := ctx.Value(scopeContextKey{}).(*Interceptor)
+	return i
+}

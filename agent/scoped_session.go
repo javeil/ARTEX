@@ -1,12 +1,20 @@
 package agent
 
 import (
+	"context"
+	"github.com/Autumn-27/artex/guard"
+	"github.com/Autumn-27/artex/intercept"
 	"github.com/Autumn-27/artex/internal/scopedfetch"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/tool"
 )
 
-func newScopedSession(opts agentcore.Options) *agentcore.Session {
+func newScopedSession(ctx context.Context, opts agentcore.Options) *agentcore.Session {
+	// Worker steering and ChatAgent already carry Guard. Every other role gets
+	// the same mandatory floor here; an omitted hook must never mean bypass.
+	if opts.Hooks == nil {
+		opts.Hooks = guard.NewWithInterceptor(intercept.FromContext(ctx)).Hooks()
+	}
 	if opts.Tools == nil {
 		opts.Tools = tool.DefaultTools()
 	}
