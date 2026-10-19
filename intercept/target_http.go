@@ -207,6 +207,11 @@ func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response,
 	}
 	req = req.Clone(leaseCtx)
 	release := releaseLease
+	version, err := i.db.AuthorizationVersion(req.Context(), TaskIDFromContext(req.Context()))
+	if err != nil {
+		release()
+		return i.rejectTargetRequest(req, err)
+	}
 	op, err := i.AuthorizeRequest(req.Context(), req)
 	if err != nil {
 		release()
@@ -263,7 +268,7 @@ func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response,
 		release()
 		return i.rejectTargetRequest(req, err)
 	}
-	id, err := i.db.BeginTargetRequest(req.Context(), TaskIDFromContext(req.Context()), op.Target, op.Method, account, p.Budget)
+	id, err := i.reserveTargetCapacity(req.Context(), op, p.Budget, version)
 	if err != nil {
 		cleanupTransport()
 		release()

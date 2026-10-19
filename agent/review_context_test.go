@@ -26,15 +26,16 @@ func TestWorkerReviewContextAcrossToolCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
-	expID, err := d.CreateExploration("只操作隔离测试目录", "验证创建和清理")
+	task, err := d.CreateTask("只操作隔离测试目录", "验证创建和清理", nil, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	expID := task.ExplorationID
 	ts := d.Exploration(expID)
-	taskID := fmt.Sprint(expID)
+	taskID := fmt.Sprint(task.ID)
 	t.Cleanup(func() {
 		_, _ = d.Exec(`DELETE FROM intercept_pending WHERE task_id=$1`, taskID)
-		_, _ = d.Exec(`DELETE FROM explorations WHERE id=$1`, expID)
+		_ = d.DeleteTask(task.ID)
 	})
 	ic := intercept.New(d)
 	priorTools, err := ic.GetEnabledTools()
@@ -84,7 +85,7 @@ func TestWorkerReviewContextAcrossToolCalls(t *testing.T) {
 		},
 	})
 	workDir := t.TempDir()
-	ctx := intercept.WithTaskContext(t.Context(), taskID, "test-agent", nil)
+	ctx := ic.WithScope(intercept.WithTaskContext(t.Context(), taskID, "test-agent", nil))
 	ctx = intercept.WithReviewContext(ctx, "/parent", intercept.ReviewBackground{Source: intercept.BackgroundUserMessage, Text: "PARENT_BACKGROUND_SENTINEL"})
 	intentPayload := map[string]any{"summary": "创建并清理", "extra": "FULL_INTENT_SENTINEL"}
 	intentID, err := ts.AddNode("intent", intentPayload, 0, "running", "planner", nil)
@@ -93,8 +94,8 @@ func TestWorkerReviewContextAcrossToolCalls(t *testing.T) {
 	}
 	rawIntent, _ := json.Marshal(intentPayload)
 	worker := NewWorker(provider, "test-model", workDir, nil, 0, 3, probe)
-	_, _, err = worker.Execute(ctx, "test-agent", expID, nil, ts, &db.Node{ID: intentID, Payload: rawIntent}, guard.NewWithInterceptor(ic).Hooks(), nil, nil, nil)
-	runDir := ensureRunDir(workDir, expID, intentID)
+	_, _, err = worker.Execute(ctx, "test-agent", task.ID, nil, ts, &db.Node{ID: intentID, Payload: rawIntent}, guard.NewWithInterceptor(ic).Hooks(), nil, nil, nil)
+	runDir := ensureRunDir(workDir, task.ID, intentID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +135,7 @@ func TestWorkerReviewContextAcrossToolCalls(t *testing.T) {
 		if json.Unmarshal(detail.Audit.ModelInput, &saved) != nil || saved.Background != nil || saved.Version != 5 {
 			t.Fatal("stored Worker review input retained a background")
 		}
-			if row.Status == "allowed" && (detail.Audit.ExecutionStatus != "succeeded" || saved.Version != 5) {
+		if row.Status == "allowed" && (detail.Audit.ExecutionStatus != "succeeded" || saved.Version != 5) {
 			t.Fatal("automatic allow lost execution result or its original background snapshot")
 		}
 		if detail.Audit.Correlation != "exact" {

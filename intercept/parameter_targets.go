@@ -18,7 +18,11 @@ func parameterTargets(raw json.RawMessage) []string {
 		switch v := value.(type) {
 		case string:
 			out = append(out, scopeURL.FindAllString(v, -1)...)
-			for _, literal := range scopeIP.FindAllString(v, -1) {
+			// The IP inside a URL is already represented with its port/path.
+			// Strip only URL spans in this value: an independent bare host in
+			// another parameter still needs its own authorization check.
+			remaining := scopeURL.ReplaceAllString(v, " ")
+			for _, literal := range scopeIP.FindAllString(remaining, -1) {
 				if _, e := netip.ParseAddr(literal); e == nil {
 					out = append(out, literal)
 				} else if _, e = netip.ParsePrefix(literal); e == nil {

