@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"testing"
 
 	"github.com/Autumn-27/artex/db"
@@ -63,7 +64,12 @@ func TestCaptureApprovalLifecycle(t *testing.T) {
 				return intercept.Decision{Action: tc.action, Message: "probe review", ProfileID: 7}, nil
 			})
 			g := guard.NewWithInterceptor(ic)
-			taskID := "approval-lifecycle-" + tc.name
+			task, err := d.CreateTask("approval lifecycle "+tc.name, "local probe", nil, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = d.DeleteTask(task.ID) })
+			taskID := strconv.FormatInt(task.ID, 10)
 			t.Cleanup(func() { _, _ = d.Exec(`DELETE FROM intercept_pending WHERE task_id=$1`, taskID) })
 			ctx := intercept.WithTaskContext(t.Context(), taskID, "test-agent", func(a db.Activity) {
 				if a.Kind != "intercept_request" || !tc.manual {
@@ -105,7 +111,7 @@ func TestCaptureApprovalLifecycle(t *testing.T) {
 					return tool.Text("probe succeeded"), nil
 				},
 			})
-			_, _, err := captureRun(ctx, agentcore.Options{Provider: provider, Tools: []tool.CoreTool{probe}, Hooks: g.Hooks(),
+			_, _, err = captureRun(ctx, agentcore.Options{Provider: provider, Tools: []tool.CoreTool{probe}, Hooks: g.Hooks(),
 				PermissionMode: permission.ModeBypass, WorkingDir: t.TempDir(), MaxTurns: 2}, "record this review", nil)
 			if err != nil {
 				t.Fatal(err)
