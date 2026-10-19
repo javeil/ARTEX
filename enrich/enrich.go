@@ -2,15 +2,19 @@
 // in docs/资产模型与自动关联设计.md §5: an async worker pool that resolves domains
 // (dnsx) and probes web assets (HTTP, through the recording proxy) and writes the
 // results back into the asset graph — creating IP/port nodes, resolves/exposes
-// edges, and filling attrs.dns / attrs.http. DNS is ungated; HTTP probing is gated
+// edges, and filling attrs.dns / attrs.http. DNS and HTTP require an explicit task; probing is gated
 // by RoE (§5.2).
 package enrich
 
 import (
+	"context"
 	"crypto/tls"
+	"fmt"
+	"github.com/Autumn-27/artex/intercept"
 	"html"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -20,9 +24,6 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/db"
-
-	"github.com/miekg/dns"
-	"github.com/projectdiscovery/dnsx/libs/dnsx"
 )
 
 type jobKind int
@@ -33,16 +34,24 @@ const (
 )
 
 type job struct {
-	kind jobKind
-	id   int64  // asset id (domain for DNS, site for HTTP)
-	arg  string // host (DNS) or url (HTTP)
+	ctx     context.Context
+	finish  func()
+	version string
+	kind    jobKind
+	id      int64  // asset id (domain for DNS, site for HTTP)
+	arg     string // host (DNS) or url (HTTP)
 }
 
 // Engine owns the resolver, the proxy-routed HTTP client, and the worker pool.
 type Engine struct {
-	as     *db.AssetStore
-	resolv *dnsx.DNSX
-	client *http.Client
+	as      *db.AssetStore
+	lookup  func(context.Context, string) (*dnsAnswer, error)
+	ctx     context.Context
+	cancel  context.CancelFunc
+	mu      sync.Mutex
+	stopped bool
+	wg      sync.WaitGroup
+	client  *http.Client
 
 	jobs   chan job
 	cool   sync.Map // dedup/cooldown: "kind:id" -> time.Time (last run)
@@ -64,24 +73,16 @@ func New(as *db.AssetStore, proxy func() string, workers int) *Engine {
 	if workers <= 0 {
 		workers = 4
 	}
-	resolv, err := dnsx.New(dnsx.Options{
-		BaseResolvers: dnsx.DefaultResolvers,
-		MaxRetries:    3,
-		QuestionTypes: []uint16{dns.TypeA, dns.TypeAAAA, dns.TypeCNAME},
-		Timeout:       4 * time.Second,
-	})
-	if err != nil {
-		log.Printf("[enrich] dnsx 初始化失败，DNS 解析停用：%v", err)
-		resolv = nil
-	}
+	root, cancel := context.WithCancel(context.Background())
 	e := &Engine{
 		as:     as,
-		resolv: resolv,
+		lookup: resolveDNS, ctx: root, cancel: cancel,
 		client: buildClient(proxy),
 		jobs:   make(chan job, queueSize),
 		closed: make(chan struct{}),
 	}
 	for i := 0; i < workers; i++ {
+		e.wg.Add(1)
 		go e.worker()
 	}
 	return e
@@ -107,28 +108,63 @@ func buildClient(proxy func() string) *http.Client {
 		}
 	}
 	return &http.Client{
-		Transport: tr,
+		Transport: scopedTransport{tr},
 		Timeout:   httpTimeout,
 		// cap redirects; keep them within scope by re-checking at probe time
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
 
-// ResolveDomain enqueues a DNS resolution for a domain asset (ungated). host is the
-// FQDN. No-op for an empty engine.
-func (e *Engine) ResolveDomain(id int64, host string) { e.enqueue(job{jobDNS, id, host}) }
-
-// ProbeSite enqueues an HTTP probe for a web-asset (site). rawURL is the site URL.
-func (e *Engine) ProbeSite(id int64, rawURL string) { e.enqueue(job{jobHTTP, id, rawURL}) }
-
-func (e *Engine) enqueue(j job) {
-	if e == nil || id0(j.id) || j.arg == "" {
-		return
+// Legacy calls do not identify an authorized task and must not start IO.
+func (e *Engine) ResolveDomain(id int64, host string) {
+	log.Printf("[enrich] DNS 未绑定授权任务，拒绝自动访问")
+}
+func (e *Engine) ProbeSite(id int64, rawURL string) {
+	log.Printf("[enrich] HTTP 未绑定授权任务，拒绝自动访问")
+}
+func (e *Engine) ResolveDomainForTask(ctx context.Context, id int64, host string) error {
+	return e.enqueue(ctx, jobDNS, id, host)
+}
+func (e *Engine) ProbeSiteForTask(ctx context.Context, id int64, rawURL string) error {
+	return e.enqueue(ctx, jobHTTP, id, rawURL)
+}
+func (e *Engine) enqueue(ctx context.Context, kind jobKind, id int64, arg string) error {
+	if e == nil || id <= 0 || arg == "" {
+		return fmt.Errorf("invalid enrichment request")
+	}
+	ic := intercept.FromContext(ctx)
+	if ic == nil || intercept.TaskIDFromContext(ctx) == "" {
+		return fmt.Errorf("enrichment requires task authorization")
+	}
+	if err := ic.CheckTarget(ctx, arg); err != nil {
+		return err
+	}
+	policy, err := ic.TrustedTaskPolicy(ctx)
+	if err != nil {
+		return err
+	}
+	parent, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(e.ctx, cancel)
+	child, release, err := intercept.BeginTargetActivity(parent)
+	if err != nil {
+		stop()
+		cancel()
+		return err
+	}
+	finish := func() { stop(); cancel(); release() }
+	j := job{ctx: child, finish: finish, version: policy.Version, kind: kind, id: id, arg: arg}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.stopped {
+		finish()
+		return fmt.Errorf("enrichment engine closed")
 	}
 	select {
 	case e.jobs <- j:
-	default: // queue full → drop (best-effort enrichment)
-		log.Printf("[enrich] 队列已满，丢弃任务 kind=%d id=%d", j.kind, j.id)
+		return nil
+	default:
+		finish()
+		return fmt.Errorf("enrichment queue full")
 	}
 }
 
@@ -139,31 +175,57 @@ func (e *Engine) Close() {
 	if e == nil {
 		return
 	}
-	e.once.Do(func() { close(e.closed) })
+	e.once.Do(func() {
+		e.mu.Lock()
+		e.stopped = true
+		e.cancel()
+		close(e.closed)
+		e.mu.Unlock()
+		e.wg.Wait()
+		for {
+			select {
+			case j := <-e.jobs:
+				j.finish()
+			default:
+				return
+			}
+		}
+	})
 }
-
 func (e *Engine) worker() {
+	defer e.wg.Done()
 	for {
 		select {
 		case <-e.closed:
 			return
 		case j := <-e.jobs:
-			if e.onCooldown(j) {
-				continue
-			}
-			switch j.kind {
-			case jobDNS:
-				e.doDNS(j.id, j.arg)
-			case jobHTTP:
-				e.doHTTP(j.id, j.arg)
-			}
+			e.perform(j)
 		}
+	}
+}
+func (e *Engine) perform(j job) {
+	defer j.finish()
+	if j.ctx.Err() != nil {
+		return
+	}
+	ic := intercept.FromContext(j.ctx)
+	policy, err := ic.TrustedTaskPolicy(j.ctx)
+	if err != nil || policy.Version != j.version || e.onCooldown(j) {
+		return
+	}
+	if j.kind == jobDNS {
+		err = e.doDNS(j.ctx, j.id, j.arg)
+	} else {
+		err = e.doHTTP(j.ctx, j.id, j.arg)
+	}
+	if err != nil {
+		log.Printf("[enrich] 目标访问未执行或失败: %v", err)
 	}
 }
 
 // onCooldown returns true (skip) if this (kind,id) ran within the cooldown window.
 func (e *Engine) onCooldown(j job) bool {
-	key := string(rune(j.kind)) + ":" + itoa(j.id)
+	key := intercept.TaskIDFromContext(j.ctx) + ":" + j.version + ":" + string(rune(j.kind)) + ":" + itoa(j.id)
 	if v, ok := e.cool.Load(key); ok {
 		if t, ok := v.(time.Time); ok && time.Since(t) < cooldown {
 			return true
@@ -177,14 +239,36 @@ func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
 // ---- DNS ----
 
-func (e *Engine) doDNS(id int64, host string) {
-	if e.resolv == nil {
-		return
+type dnsAnswer struct{ A, AAAA, CNAME []string }
+
+func resolveDNS(ctx context.Context, host string) (*dnsAnswer, error) {
+	values, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
 	}
-	data, err := e.resolv.QueryMultiple(host)
-	if err != nil || data == nil {
-		return
+	out := &dnsAnswer{}
+	for _, value := range values {
+		if value.IP.To4() != nil {
+			out.A = append(out.A, value.IP.String())
+		} else {
+			out.AAAA = append(out.AAAA, value.IP.String())
+		}
 	}
+	if canonical, err := net.DefaultResolver.LookupCNAME(ctx, host); err == nil && strings.TrimSuffix(canonical, ".") != strings.TrimSuffix(host, ".") {
+		out.CNAME = append(out.CNAME, strings.TrimSuffix(canonical, "."))
+	}
+	return out, nil
+}
+func (e *Engine) doDNS(ctx context.Context, id int64, host string) error {
+	var data *dnsAnswer
+	err := intercept.QueryAuthorizedDNS(ctx, host, func(bound context.Context) error { var err error; data, err = e.lookup(bound, host); return err })
+	if err != nil {
+		return err
+	}
+	if data == nil || e.as == nil {
+		return nil
+	}
+
 	ips := uniq(append(append([]string{}, data.A...), data.AAAA...))
 	// Upsert resolved IPs into the asset store.
 	for _, ip := range ips {
@@ -215,37 +299,45 @@ func (e *Engine) doDNS(id int64, host string) {
 			RecordValue: []string{cname},
 		})
 	}
+	return nil
 }
 
 // ---- HTTP probe ----
 
 var reTitle = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 
-func (e *Engine) doHTTP(id int64, rawURL string) {
+func (e *Engine) doHTTP(ctx context.Context, id int64, rawURL string) error {
 	host := hostOf(rawURL)
 	if host == "" {
-		return
+		return fmt.Errorf("invalid or failed enrichment request")
 	}
-	req, err := http.NewRequest("GET", rawURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
 	if err != nil {
-		return
+		return fmt.Errorf("invalid or failed enrichment request")
 	}
 	req.Header.Set("User-Agent", "artex-enrich/1.0")
 	resp, err := e.client.Do(req)
 	if err != nil {
-		return
+		return fmt.Errorf("invalid or failed enrichment request")
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // cap 1 MiB
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if readErr != nil {
+		return readErr
+	} // cap 1 MiB
 	statusCode := resp.StatusCode
 	bodyLen := int64(len(body))
 	title := extractTitle(body)
-	_, _ = e.as.UpsertHTTPService(db.UpsertHTTPServiceReq{
+	if e.as == nil {
+		return nil
+	}
+	_, err = e.as.UpsertHTTPService(db.UpsertHTTPServiceReq{
 		URL:           rawURL,
 		StatusCode:    &statusCode,
 		ContentLength: &bodyLen,
 		PageTitle:     title,
 	})
+	return err
 }
 
 func extractTitle(body []byte) string {
@@ -289,4 +381,10 @@ func uniq(in []string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+type scopedTransport struct{ base http.RoundTripper }
+
+func (t scopedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return intercept.TargetRoundTrip(t.base, req)
 }

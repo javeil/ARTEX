@@ -149,3 +149,16 @@ func (i *Interceptor) CancelAllTargetIO() {
 		cancel()
 	}
 }
+
+// BeginTargetActivity tracks host-side asynchronous work under the same stop
+// barrier as SDK runs. Missing task/context is an error, never an untracked IO.
+func BeginTargetActivity(ctx context.Context) (context.Context, func(), error) {
+	i := FromContext(ctx)
+	if i == nil || TaskIDFromContext(ctx) == "" {
+		return ctx, nil, fmt.Errorf("目标后台访问必须绑定授权任务")
+	}
+	if err := i.db.CheckTaskExecution(ctx, TaskIDFromContext(ctx)); err != nil {
+		return ctx, nil, err
+	}
+	return i.acquireTargetIO(ctx, "activity")
+}
