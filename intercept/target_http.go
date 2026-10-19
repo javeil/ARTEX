@@ -79,7 +79,7 @@ func RequestOperation(req *http.Request) (Operation, error) {
 	if err != nil {
 		return Operation{}, err
 	}
-	o := Operation{Target: target, Method: req.Method}
+	o := Operation{Target: target, Method: req.Method, ContentType: req.Header.Get("Content-Type")}
 	if req.Body != nil && req.Body != http.NoBody {
 		original := req.Body
 		b, err := io.ReadAll(io.LimitReader(original, (1<<20)+1))
@@ -98,9 +98,9 @@ func RequestOperation(req *http.Request) (Operation, error) {
 	if o.Effect == "" {
 		o.Effect = classifyOperation(o)
 	}
-	if req.Header.Get("Authorization") != "" && (o.Effect == "read" || o.Effect == "unknown_write" || o.Effect == "authenticate") {
+	if (req.Header.Get("Authorization") != "" || req.Header.Get("Cookie") != "") && (o.Effect == "read" || o.Effect == "unknown_write" || o.Effect == "authenticate") {
 		o.Effect = "authenticate"
-		if username, _, ok := req.BasicAuth(); ok && len(req.Header.Values("Authorization")) == 1 {
+		if username, _, ok := req.BasicAuth(); ok && len(req.Header.Values("Authorization")) == 1 && req.Header.Get("Cookie") == "" {
 			o.Account = username
 		} else {
 			o.OpaqueCredential = true

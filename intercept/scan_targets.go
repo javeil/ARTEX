@@ -56,11 +56,16 @@ func ScopeTargetRecords(tool string, input []byte, hosts []string) []db.Target {
 							raw = strings.TrimPrefix(a, "-p")
 						}
 						if raw != "" {
-							ports = parseScanPorts(raw)
+							ports = append(ports, parseScanPorts(raw)...)
 						}
 					}
 				} else if len(args) > 2 {
 					ports = parseScanPorts(args[len(args)-1])
+					for _, a := range args[1:] {
+						if a == "-u" {
+							scheme = "udp"
+						}
+					}
 				}
 				for _, h := range hosts {
 					found := false
