@@ -106,6 +106,9 @@ func (i *Interceptor) ScopeDecision(ctx context.Context, tool string, input []by
 		if err := i.db.CheckTaskExecution(ctx, TaskIDFromContext(ctx)); err != nil {
 			return Decision{Action: "deny", Message: "目标不在本任务授权范围：" + err.Error()}, true
 		}
+		if err := i.CheckProgress(ctx, TaskIDFromContext(ctx)); err != nil {
+			return Decision{Action: "deny", Message: err.Error()}, true
+		}
 	}
 	if (len(hosts) > 0 || unknown) && i.TargetIOState(TaskIDFromContext(ctx)).Blocked {
 		return Decision{Action: "deny", Message: "目标访问已停止，需用户明确恢复"}, true
@@ -338,6 +341,9 @@ func ScopeTargets(tool string, input []byte) (hosts []string, unknown bool) {
 			}
 			return true
 		})
+		if shellFollowsRedirects(tool, input) {
+			unknown = true
+		}
 		if strings.Contains(command, "/dev/tcp/") || strings.Contains(command, "/dev/udp/") {
 			unknown = true
 		}

@@ -50,7 +50,7 @@ func targetHTTPTool() tool.CoreTool {
 			client := &http.Client{Transport: targetHTTPTransport{transport}, Timeout: 120 * time.Second}
 			response, e := client.Do(request)
 			if e != nil {
-				return tool.Errorf("【ARTEX 目标管控】" + e.Error()), nil
+				return tool.Errorf(intercept.TargetErrorMessage(e)), nil
 			}
 			defer response.Body.Close()
 			// Large target reads remain available in full without buffering an entire

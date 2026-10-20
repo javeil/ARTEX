@@ -842,6 +842,11 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		if e.isSettling(t.ID) {
 			return
 		}
+		if e.m.interceptor != nil {
+			if err := e.m.interceptor.CheckProgress(ctx, t.ID); err != nil {
+				return
+			}
+		}
 		// goalless（人工直投）分支：任务已无 open 目标时 planner 不跑——跑了会重判
 		// met→cancelExec 杀掉用户经主 agent 直投的意图。是否结束改由 frontier 决定：
 		// 还有 open/running 意图 → 保持 running、静默等待；意图已全部跑干 → 落 done。
@@ -967,6 +972,11 @@ func (e *Engine) workerLoop(ctx context.Context, t *Task, name string) {
 // runIntent. Returns false when nothing was claimable. The pool worker loop is its
 // only caller.
 func (e *Engine) runWorkerStep(ctx context.Context, t *Task, name string, worker *agent.Worker) bool {
+	if e.m.interceptor != nil {
+		if err := e.m.interceptor.CheckProgress(ctx, t.ID); err != nil {
+			return false
+		}
+	}
 	intent := e.claimNext(t, name)
 	if intent == nil {
 		return false

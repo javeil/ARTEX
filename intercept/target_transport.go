@@ -57,7 +57,7 @@ func (i *Interceptor) checkedTransport(req *http.Request, base http.RoundTripper
 			return nil, err
 		}
 		if db.NormalizeScopeHost(name) != db.NormalizeScopeHost(host) {
-			return nil, fmt.Errorf("传输器试图改变任务目标")
+			return nil, controlError(fmt.Errorf("传输器试图改变任务目标"))
 		}
 		addresses := []net.IPAddr{}
 		if ip := net.ParseIP(name); ip != nil {
@@ -72,11 +72,11 @@ func (i *Interceptor) checkedTransport(req *http.Request, base http.RoundTripper
 		for _, address := range addresses {
 			ip := address.IP.String()
 			if err = db.CheckResolvedIP(rules, ip); err != nil {
-				last = err
+				last = controlError(err)
 				continue
 			}
 			if err = i.db.CheckTaskExecution(ctx, TaskIDFromContext(ctx)); err != nil {
-				return nil, err
+				return nil, controlError(err)
 			}
 			conn, err := dial(ctx, network, net.JoinHostPort(ip, port))
 			if err != nil {
@@ -86,7 +86,7 @@ func (i *Interceptor) checkedTransport(req *http.Request, base http.RoundTripper
 			actual, ok := conn.RemoteAddr().(*net.TCPAddr)
 			if !ok || !actual.IP.Equal(address.IP) {
 				conn.Close()
-				last = fmt.Errorf("目标连接地址与已校验 IP 不一致")
+				last = controlError(fmt.Errorf("目标连接地址与已校验 IP 不一致"))
 				continue
 			}
 			if err = ctx.Err(); err != nil {

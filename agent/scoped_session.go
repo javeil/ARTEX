@@ -18,6 +18,9 @@ func newScopedSession(ctx context.Context, opts agentcore.Options) *agentcore.Se
 	if opts.Tools == nil {
 		opts.Tools = tool.DefaultTools()
 	}
+	if i := intercept.FromContext(ctx); i != nil && i.CanRequestOperator() && intercept.TaskIDFromContext(ctx) != "" {
+		opts.Tools = append(opts.Tools, requestOperatorTool())
+	}
 	enableTargetHTTP := opts.EnableWebFetch
 	for _, t := range opts.Tools {
 		enableTargetHTTP = enableTargetHTTP || t.Name() == "Bash"

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -127,14 +128,27 @@ func (s *Server) applyTaskControlWithCause(t *Task, action string, pauseCause er
 			}
 			return out, fmt.Errorf("任务已经暂停")
 		}
+		// An asynchronous safety stop cannot cross a human pause/resume cycle.
+		var expected *db.ExecutionBlock
+		if errors.As(pauseCause, &expected) && expected.AuthorizationEpoch != 0 {
+			var currentEpoch int64
+			if err := s.m.pg.QueryRow(`SELECT authorization_epoch FROM tasks WHERE id::text=$1`, t.ID).Scan(&currentEpoch); err != nil {
+				return out, err
+			}
+			if currentEpoch != expected.AuthorizationEpoch {
+				return out, fmt.Errorf("stale automatic pause")
+			}
+		}
 		wasQueued := lifecycle.Queued
 		wasEnginePaused := s.engine.IsPaused(t.ID)
 		if pauseCause == nil {
 			pauseCause = agent.AbortPausedByUser
 		}
 		s.engine.Pause(t.ID, pauseCause)
-		if err := s.m.ApplyTaskPauseOrigin(t.ID, pauseCause == agent.AbortPausedBySchedule); err != nil {
-			if !wasEnginePaused && !wasQueued {
+		var block *db.ExecutionBlock
+		errors.As(pauseCause, &block)
+		if err := s.m.applyTaskPauseControl(t.ID, pauseCause == agent.AbortPausedBySchedule, block); err != nil {
+			if block == nil && !wasEnginePaused && !wasQueued {
 				s.engine.Resume(t)
 			}
 			return out, err
@@ -307,4 +321,18 @@ func (s *Server) controlTasksBatch(w http.ResponseWriter, r *http.Request) {
 		items = append(items, item)
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+// All automatic stops share deletion/concurrency coordination and the same
+// worker, chat and target drain path as the authenticated pause API.
+func (s *Server) pauseTaskForProgress(id string, block *db.ExecutionBlock) error {
+	t, ok := s.m.Task(id)
+	if !ok {
+		return fmt.Errorf("task not found")
+	}
+	_, err := s.applyTaskControlWithCause(t, "pause", block)
+	if err == nil {
+		s.engine.emitActivity(t, db.Activity{Worker: "system", Kind: "text", Summary: "任务自动暂停：" + block.Reason})
+	}
+	return err
 }

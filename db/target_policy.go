@@ -95,6 +95,9 @@ type TargetBudget struct {
 // Missing target restrictions retain legacy manually granted hosts, never grant
 // new hosts. An explicit target list narrows those grants.
 type TargetPolicy struct {
+	// nil uses the safe default; explicit zero is an operator opt-out.
+	NoResponseLimit            *int              `json:"no_response_limit,omitempty"`
+	RepeatDenialLimit          *int              `json:"repeat_denial_limit,omitempty"`
 	RestoreReviewRequired      bool              `json:"restore_review_required,omitempty"`
 	ConstraintAcknowledgements map[string]string `json:"constraint_acknowledgements,omitempty"`
 	Mode                       string            `json:"mode"` // standard|read_only|passive
@@ -108,6 +111,11 @@ type TargetPolicy struct {
 }
 
 func (p TargetPolicy) Validate() error {
+	for _, n := range []*int{p.NoResponseLimit, p.RepeatDenialLimit} {
+		if n != nil && (*n < 0 || *n > 1000) {
+			return fmt.Errorf("停手阈值必须在 0..1000，0 表示由管理员关闭此项")
+		}
+	}
 	switch p.Mode {
 	case "", "standard", "read_only", "passive":
 	default:

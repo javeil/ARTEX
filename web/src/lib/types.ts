@@ -1748,6 +1748,8 @@ export interface TargetSpec {
   excluded_path_prefixes?: string[];
 }
 export interface TargetPolicy {
+  no_response_limit?: number;
+  repeat_denial_limit?: number;
   restore_review_required?: boolean;
   constraint_acknowledgements?: Record<string, string>;
   mode: "standard" | "read_only" | "passive";
@@ -1772,6 +1774,7 @@ export interface TargetRequestRecord {
   state: string;
   status_code: number;
   error: string;
+  error_kind?: string;
   latency_ms: number;
 }
 export interface TargetTestResource {

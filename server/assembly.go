@@ -214,6 +214,20 @@ func seedPrompts(pg *db.DB) {
 			log.Printf("[prompts] seed %s 失败: %v", key, err)
 		}
 	}
+	migratePlannerProgressPrompt(pg)
+}
+
+// The hash is the exact prior plannerDefaultTmpl, including whitespace.
+const legacyPlannerProgressHash = "14e163f4a44da9fee20a214048a607adc3659b2025275569eb512532ca8c15d5"
+
+func migratePlannerProgressPrompt(pg *db.DB) {
+	a, err := pg.GetAgentByKey("planner")
+	if err != nil || a == nil {
+		return
+	}
+	if _, err = pg.UpgradeDefaultPromptHash(a.ID, legacyPlannerProgressHash, agent.BuiltinPromptSeeds()["planner"]); err != nil {
+		log.Printf("[prompts] planner progress migration failed: %v", err)
+	}
 }
 
 // wireTools seeds the built-in tool catalog (idempotent, first-insert only so page
