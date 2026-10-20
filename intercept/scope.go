@@ -262,6 +262,9 @@ func ScopeTargets(tool string, input []byte) (hosts []string, unknown bool) {
 			case "sed":
 				local = readOnlySed(args)
 				unknown = unknown || !local
+			case "sleep", "date":
+				local = localWaitOrClock(name, args)
+				unknown = unknown || !local
 			case "base64":
 				local = localBase64(args)
 				unknown = unknown || !local
@@ -272,8 +275,17 @@ func ScopeTargets(tool string, input []byte) (hosts []string, unknown bool) {
 				local = false
 				unknown = true
 			}
+			targetArgs := args[1:]
+			if name == "curl" || name == "wget" {
+				destinations, err := httpClientDestinations(name, args)
+				if err != nil {
+					unknown = true
+				} else {
+					targetArgs = destinations
+				}
+			}
 			found := false
-			for _, arg := range args[1:] {
+			for _, arg := range targetArgs {
 				if local {
 					localDataTargets = append(localDataTargets, scopeURL.FindAllString(arg, -1)...)
 					localDataTargets = append(localDataTargets, scopeIP.FindAllString(arg, -1)...)
@@ -449,10 +461,42 @@ func ScopeTargetDetails(tool string, input []byte, hosts []string) []string {
 	}
 	if tool == "Bash" || tool == "Monitor" || tool == "shell_open" || tool == "shell_send" {
 		cmd := shellinput.Command(tool, input)
-		for _, raw := range scopeURL.FindAllString(cmd, -1) {
-			if u, e := url.Parse(raw); e == nil && u.Hostname() != "" {
-				values = append(values, raw)
-				covered[db.NormalizeScopeHost(u.Hostname())] = true
+		// Parse argv roles just like ScopeTargets. URLs embedded in curl headers,
+		// bodies and output filenames are not additional requests.
+		fragments := []string{}
+		tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "scope-details")
+		if err != nil {
+			fragments = append(fragments, cmd)
+		} else {
+			syntax.Walk(tree, func(n syntax.Node) bool {
+				call, ok := n.(*syntax.CallExpr)
+				if !ok || len(call.Args) == 0 {
+					return true
+				}
+				args := []string{}
+				known := true
+				for _, w := range call.Args {
+					v, k := staticWord(w)
+					known = known && k
+					args = append(args, v)
+				}
+				name := filepath.Base(args[0])
+				if known && (name == "curl" || name == "wget") {
+					if destinations, err := httpClientDestinations(name, args); err == nil {
+						fragments = append(fragments, destinations...)
+						return true
+					}
+				}
+				fragments = append(fragments, args...)
+				return true
+			})
+		}
+		for _, fragment := range fragments {
+			for _, raw := range scopeURL.FindAllString(fragment, -1) {
+				if u, e := url.Parse(raw); e == nil && u.Hostname() != "" {
+					values = append(values, raw)
+					covered[db.NormalizeScopeHost(u.Hostname())] = true
+				}
 			}
 		}
 	}
