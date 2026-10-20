@@ -42,6 +42,7 @@ function Field({ label, children }: { label: string; children: React.ReactElemen
 export function TargetControlPanel({ taskId }: { taskId: string }) {
   const [targetKeys, setTargetKeys] = React.useState<string[]>([]);
   const [operationKeys, setOperationKeys] = React.useState<string[]>([]);
+  const [pauseReason, setPauseReason] = React.useState("");
   const [taskPaused, setTaskPaused] = React.useState(false);
   const [monitorError, setMonitorError] = React.useState("");
   const [effectiveMode, setEffectiveMode] = React.useState("");
@@ -84,6 +85,7 @@ export function TargetControlPanel({ taskId }: { taskId: string }) {
       if (result[0].status === "fulfilled") {
         setState(result[0].value.target_io);
         setTaskPaused(result[0].value.task_paused);
+        setPauseReason(result[0].value.pause_reason || "");
       } else setState(null);
       setMonitorError(
         result.some((r) => r.status === "rejected") ? "目标执行状态或记录刷新失败，请勿据旧状态判断已停止" : "",
@@ -152,6 +154,7 @@ export function TargetControlPanel({ taskId }: { taskId: string }) {
           {status}
           {state && <span className="ml-2 text-xs text-muted-foreground">未结束执行/请求：{state.active}</span>}
         </div>
+        {taskPaused && pauseReason && <p className="text-sm text-amber-600">自动暂停原因：{pauseReason}</p>}
         {monitorError && <p className="text-destructive text-sm">{monitorError}</p>}
         {error && <p className="text-sm text-destructive">{error}</p>}
         {policy?.restore_review_required && <p className="text-destructive text-sm">此任务由归档恢复，主动访问已阻止。请核对授权范围、排除规则与预算，再保存用户确认的策略。</p>}
@@ -182,6 +185,15 @@ export function TargetControlPanel({ taskId }: { taskId: string }) {
               <p className="text-muted-foreground text-xs">
                 当前生效模式：{effectiveMode || "standard"}。人工只读、被动、禁止登录等明确约束会进一步收窄以下配置。
               </p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Field label="连续无 HTTP 响应后暂停（默认 8 次）">
+                  <Input type="number" min={0} max={1000} value={policy.no_response_limit ?? 8} onChange={(e) => update({ no_response_limit: Number(e.target.value) })} />
+                </Field>
+                <Field label="同类平台拒绝后暂停（默认 3 次）">
+                  <Input type="number" min={0} max={1000} value={policy.repeat_denial_limit ?? 3} onChange={(e) => update({ repeat_denial_limit: Number(e.target.value) })} />
+                </Field>
+              </div>
+              <p className="text-muted-foreground text-xs">0 表示由管理员关闭对应停手条件；不会放宽目标授权或请求预算。正常 HTTP 状态码不计为无响应。人工恢复任务开始新的重试周期，累计请求和账号预算保留。</p>
               <Field label="允许的测试方式">
                 <select
                   className="rounded-md border bg-background p-2"

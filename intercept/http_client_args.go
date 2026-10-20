@@ -10,9 +10,15 @@ import (
 // Consume option values before checking the next token: a POST body beginning
 // with '-x' is data, not a proxy option.
 func validateHTTPClientArgs(name string, args []string) error {
+	_, err := httpClientDestinations(name, args)
+	return err
+}
+
+// Return only network destinations; option payloads and local output paths are data.
+func httpClientDestinations(name string, args []string) (destinations []string, err error) {
 	dangerous := []string{"--proxy", "--noproxy", "--socks", "--config", "--connect-to", "--resolve", "--next", "--preproxy", "--doh-url", "--unix-socket", "--abstract-unix-socket", "--execute", "--no-proxy", "--use-askpass", "--follow-ftp", "--input-file", "--expand", "--variable", "--alt-svc"}
 	values := map[string]bool{}
-	for _, v := range strings.Fields("--request --method --data --data-raw --data-binary --data-urlencode --json --form --form-string --header --cookie --cookie-jar --user --user-agent --referer --output --output-document --dump-header --upload-file --url --url-query --range --max-time --connect-timeout --retry --retry-delay --retry-max-time --max-redirs --cacert --capath --cert --key --ciphers --post-data --post-file --body-data --body-file --timeout --tries --wait --waitretry --limit-rate --accept --reject --directory-prefix --cut-dirs --user-password --http-user --http-password --domains --exclude-domains --level") {
+	for _, v := range strings.Fields("--request --method --data --data-raw --data-binary --data-urlencode --json --form --form-string --header --cookie --cookie-jar --user --user-agent --referer --output --output-document --dump-header --upload-file --url --url-query --range --max-time --connect-timeout --retry --retry-delay --retry-max-time --max-redirs --max-redirect --cacert --capath --cert --key --ciphers --post-data --post-file --body-data --body-file --timeout --tries --wait --waitretry --limit-rate --accept --reject --directory-prefix --cut-dirs --user-password --http-user --http-password --domains --exclude-domains --level") {
 		values[v] = true
 	}
 	flags := map[string]bool{}
@@ -22,25 +28,31 @@ func validateHTTPClientArgs(name string, args []string) error {
 	for i := 1; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
-			return fmt.Errorf("HTTP 客户端不允许终止参数解析后覆盖目标网关，请用 TargetHTTP")
+			return nil, fmt.Errorf("HTTP 客户端不允许终止参数解析后覆盖目标网关，请用 TargetHTTP")
 		}
 		if strings.HasPrefix(arg, "--") {
-			option, _, hasValue := strings.Cut(arg, "=")
+			option, value, hasValue := strings.Cut(arg, "=")
 			for _, blocked := range dangerous {
 				// curl/wget accept abbreviated long options; do not admit an abbreviation
 				// of a forbidden transport/configuration option.
 				if strings.HasPrefix(option, blocked) || strings.HasPrefix(blocked, option) {
-					return fmt.Errorf("HTTP 客户端参数不能覆盖网关或载入外部配置：%s", option)
+					return nil, fmt.Errorf("HTTP 客户端参数不能覆盖网关或载入外部配置：%s", option)
 				}
 			}
 			if !values[option] && !flags[option] {
-				return fmt.Errorf("不支持验证的 HTTP 客户端选项：%s，请使用 TargetHTTP", option)
+				return nil, fmt.Errorf("不支持验证的 HTTP 客户端选项：%s，请使用 TargetHTTP", option)
 			}
 			if values[option] && !hasValue {
 				i++
 				if i >= len(args) {
-					return fmt.Errorf("HTTP 参数缺少值：%s", option)
+					return nil, fmt.Errorf("HTTP 参数缺少值：%s", option)
 				}
+			}
+			if option == "--url" {
+				if !hasValue {
+					value = args[i]
+				}
+				destinations = append(destinations, value)
 			}
 			continue
 		}
@@ -55,26 +67,27 @@ func validateHTTPClientArgs(name string, args []string) error {
 			}
 			for j := 1; j < len(arg); j++ {
 				if strings.ContainsRune(forbidden, rune(arg[j])) {
-					return fmt.Errorf("HTTP 短参数不能覆盖网关或载入配置：%s", arg)
+					return nil, fmt.Errorf("HTTP 短参数不能覆盖网关或载入配置：%s", arg)
 				}
 				if strings.ContainsRune(valueFlags, rune(arg[j])) {
 					if j == len(arg)-1 {
 						i++
 						if i >= len(args) {
-							return fmt.Errorf("HTTP 参数缺少值：%s", arg)
+							return nil, fmt.Errorf("HTTP 参数缺少值：%s", arg)
 						}
 					}
 					break
 				}
 				if !strings.ContainsRune(boolFlags, rune(arg[j])) {
-					return fmt.Errorf("不支持验证的 HTTP 短选项：%s", arg)
+					return nil, fmt.Errorf("不支持验证的 HTTP 短选项：%s", arg)
 				}
 			}
 			continue
 		}
 		if strings.Contains(arg, "://") && !strings.HasPrefix(strings.ToLower(arg), "http://") && !strings.HasPrefix(strings.ToLower(arg), "https://") {
-			return fmt.Errorf("此任务网关仅支持 HTTP(S) 客户端目标")
+			return nil, fmt.Errorf("此任务网关仅支持 HTTP(S) 客户端目标")
 		}
+		destinations = append(destinations, arg)
 	}
-	return nil
+	return destinations, nil
 }

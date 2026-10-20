@@ -55,7 +55,12 @@ func (s *Server) targetControl(w http.ResponseWriter, r *http.Request) {
 		s.m.interceptor.ResumeTargetIO(id)
 	}
 	state := s.m.interceptor.TargetIOState(id)
-	writeJSON(w, 200, map[string]any{"target_io": state, "task_paused": task.Paused})
+	reason, e := pg.TaskPauseReason(r.Context(), id)
+	if e != nil {
+		writeErr(w, 500, e.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"target_io": state, "task_paused": task.Paused, "pause_reason": reason})
 }
 func (s *Server) resetTargetSafety(w http.ResponseWriter, r *http.Request) {
 	pg := s.pg(w)

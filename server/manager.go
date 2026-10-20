@@ -1235,6 +1235,9 @@ func (m *Manager) ApplyTaskAdmission(id, expectedStatus, status string, queued b
 func (m *Manager) ApplyTaskPause(id string) error { return m.ApplyTaskPauseOrigin(id, false) }
 
 func (m *Manager) ApplyTaskPauseOrigin(id string, scheduled bool) error {
+	return m.applyTaskPauseControl(id, scheduled, nil)
+}
+func (m *Manager) applyTaskPauseControl(id string, scheduled bool, block *pgdb.ExecutionBlock) error {
 	m.taskStateMu.Lock()
 	defer m.taskStateMu.Unlock()
 	n, err := strconv.ParseInt(id, 10, 64)
@@ -1242,11 +1245,21 @@ func (m *Manager) ApplyTaskPauseOrigin(id string, scheduled bool) error {
 		return err
 	}
 	var mode string
-	err = m.pg.QueryRow(`UPDATE tasks
-		SET paused=true, queued=false, queued_at=NULL, schedule_paused=$2
-		WHERE id=$1 AND deleted_at IS NULL AND paused=false
-		  AND status NOT IN ('done','failed','timeout')
-		RETURNING COALESCE(queue_mode,'')`, n, scheduled).Scan(&mode)
+	epoch, reason := int64(0), ""
+	if block != nil {
+		epoch = block.AuthorizationEpoch
+		reason = block.Code + ": " + block.Reason
+	}
+	// A single statement commits both lifecycle state and the operator-visible cause.
+	err = m.pg.QueryRow(`WITH paused AS (
+ UPDATE tasks SET paused=true,queued=false,queued_at=NULL,schedule_paused=$2
+ WHERE id=$1 AND deleted_at IS NULL AND paused=false AND status NOT IN ('done','failed','timeout')
+ AND ($3::bigint=0 OR authorization_epoch=$3)
+ RETURNING COALESCE(queue_mode,'') AS mode,authorization_epoch
+ ), audit AS (
+ INSERT INTO target_control_events(task_id,actor,action,reason,target_key)
+ SELECT $1::text,'ARTEX safety controller','auto_pause',$4,'epoch:'||authorization_epoch::text FROM paused WHERE $4<>''
+ ) SELECT mode FROM paused`, n, scheduled, epoch, reason).Scan(&mode)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("task %s is unavailable for pause", id)
 	}

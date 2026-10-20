@@ -4,6 +4,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -125,4 +126,43 @@ func trustedLocalExecutable(provided, name string) bool {
 	}
 	trusted, err = filepath.EvalSymlinks(trusted)
 	return err == nil && trusted == actual
+}
+
+// Static bounded waits and clock reads cannot contact a target. Setting the
+// clock, reading date programs from files and dynamic expansions stay opaque.
+func localWaitOrClock(name string, args []string) bool {
+	if name == "sleep" {
+		if len(args) < 2 {
+			return false
+		}
+		total := 0.0
+		for _, a := range args[1:] {
+			scale := 1.0
+			if len(a) > 0 {
+				switch a[len(a)-1] {
+				case 's':
+					a = a[:len(a)-1]
+				case 'm':
+					scale = 60
+					a = a[:len(a)-1]
+				case 'h':
+					scale = 3600
+					a = a[:len(a)-1]
+				}
+			}
+			n, err := strconv.ParseFloat(a, 64)
+			if err != nil || n < 0 || n > 3600 {
+				return false
+			}
+			total += n * scale
+		}
+		return total >= 0 && total <= 3600
+	}
+	for _, a := range args[1:] {
+		if a == "-u" || a == "--utc" || a == "--universal" || a == "-I" || a == "-Iseconds" || a == "--iso-8601=seconds" || strings.HasPrefix(a, "+") {
+			continue
+		}
+		return false
+	}
+	return true
 }

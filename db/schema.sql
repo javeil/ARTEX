@@ -1629,3 +1629,13 @@ ALTER TABLE target_test_resources ADD COLUMN IF NOT EXISTS conditional_cleanup B
 
 -- Keep company attribution discovery separate from operator authorization.
 ALTER TABLE company_scope ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
+
+-- Outcome attribution and cycle binding for bounded retry/approval loops.
+ALTER TABLE target_requests ADD COLUMN IF NOT EXISTS error_kind TEXT NOT NULL DEFAULT '';
+ALTER TABLE target_requests ADD COLUMN IF NOT EXISTS authorization_epoch BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS authorization_version TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_target_progress_cycle ON target_requests(task_id,authorization_epoch,id DESC);
+CREATE INDEX IF NOT EXISTS idx_tool_progress_version ON tool_call_audit(task_id,authorization_version,id DESC);
+CREATE INDEX IF NOT EXISTS idx_target_control_task ON target_control_events(task_id,id DESC);
+ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE target_requests ADD COLUMN IF NOT EXISTS authorization_version TEXT NOT NULL DEFAULT '';

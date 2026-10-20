@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/Autumn-27/artex/db"
 	"io"
@@ -199,7 +200,10 @@ func (i *Interceptor) AuthorizeRequest(ctx context.Context, req *http.Request) (
 func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response, error) {
 	i, _ := req.Context().Value(scopeContextKey{}).(*Interceptor)
 	if i == nil || i.db == nil {
-		return nil, fmt.Errorf("目标访问校验器不可用，必须绑定授权任务")
+		return nil, controlError(fmt.Errorf("目标访问校验器不可用，必须绑定授权任务"))
+	}
+	if err := i.CheckProgress(req.Context(), TaskIDFromContext(req.Context())); err != nil {
+		return i.rejectTargetRequest(req, err)
 	}
 	leaseCtx, releaseLease, err := i.acquireTargetIO(req.Context(), "http")
 	if err != nil {
@@ -290,10 +294,15 @@ func TargetRoundTrip(base http.RoundTripper, req *http.Request) (*http.Response,
 		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(req.Context()), 2*time.Second)
 		defer cancel()
 		defer release()
-		if saveErr := i.db.FinishTargetRequest(finishCtx, id, 0, latency, err.Error(), 0); saveErr != nil {
+		kind := TargetErrorKind(err)
+		if errors.Is(req.Context().Err(), context.Canceled) {
+			kind = "cancelled"
+		}
+		if saveErr := i.db.FinishTargetRequestOutcome(finishCtx, id, 0, latency, err.Error(), kind, 0); saveErr != nil {
 			return nil, fmt.Errorf("目标请求失败且审计结果写入失败: %w", saveErr)
 		}
-		return nil, err
+		i.observeProgress(finishCtx, TaskIDFromContext(req.Context()))
+		return nil, &TargetError{Kind: kind, Err: err}
 	}
 	if resp.Request == nil {
 		resp.Request = req
@@ -413,6 +422,7 @@ func (b *targetResponseBody) Close() error {
 }
 
 func (i *Interceptor) rejectTargetRequest(req *http.Request, reason error) (*http.Response, error) {
+	reason = controlError(reason)
 	target, e := parseRequestTarget(req)
 	if e != nil {
 		return nil, reason
@@ -420,7 +430,8 @@ func (i *Interceptor) rejectTargetRequest(req *http.Request, reason error) (*htt
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(req.Context()), 2*time.Second)
 	defer cancel()
 	if e = i.db.RecordDeniedTargetRequest(ctx, TaskIDFromContext(req.Context()), target, req.Method, reason.Error()); e != nil {
-		return nil, fmt.Errorf("目标访问拒绝且审计不可用：%w", e)
+		return nil, controlError(fmt.Errorf("目标访问拒绝且审计不可用：%w", e))
 	}
+	i.observeProgress(ctx, TaskIDFromContext(req.Context()))
 	return nil, reason
 }

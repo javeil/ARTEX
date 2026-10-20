@@ -298,7 +298,7 @@ export const api = {
   // ---- tasks ----
   targetPolicy: (id: string) => get<TargetPolicyResponse>(`/tasks/${id}/target-policy`),
   saveTargetPolicy: (id: string, policy: TargetPolicy) => put<TargetPolicyResponse>(`/tasks/${id}/target-policy`, policy),
-  targetControl: (id: string) => get<{ target_io: TargetControlState; task_paused: boolean }>(`/tasks/${id}/target-control`),
+  targetControl: (id: string) => get<{ target_io: TargetControlState; task_paused: boolean; pause_reason: string }>(`/tasks/${id}/target-control`),
   resumeTargetAccess: (id: string, reason: string) => post(`/tasks/${id}/target-control/resume`, { reason }),
   resetTargetCooldown: (id: string, target_url: string, reason: string) => post(`/tasks/${id}/target-control/reset-cooldown`, { target_url, reason }),
   targetRequests: (id: string) => get<{ requests: TargetRequestRecord[] }>(`/tasks/${id}/target-requests?limit=10`),

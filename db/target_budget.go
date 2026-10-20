@@ -16,6 +16,10 @@ import (
 // MaxRequests is the engagement's total request budget. No model/worker cache can
 // reset these counters.
 func (d *DB) BeginTargetRequest(ctx context.Context, taskID string, target Target, method, account string, budget TargetBudget) (int64, error) {
+	version, err := d.AuthorizationVersion(ctx, taskID)
+	if err != nil {
+		return 0, err
+	}
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -118,7 +122,7 @@ func (d *DB) BeginTargetRequest(ctx context.Context, taskID string, target Targe
 		return 0, &TargetCapacityError{Message: fmt.Sprintf("目标速率预算已达上限 %d/s", cap), RetryAfter: delay}
 	}
 	var id int64
-	err = tx.QueryRowContext(ctx, `INSERT INTO target_requests(task_id,target_key,url,method,account_hash,budget,started_at) VALUES ($1,$2,$3,$4,$5,$6::jsonb,clock_timestamp()) RETURNING id`, taskID, key, target.URL, method, digest, raw).Scan(&id)
+	err = tx.QueryRowContext(ctx, `INSERT INTO target_requests(task_id,target_key,url,method,account_hash,budget,started_at,authorization_epoch,authorization_version) VALUES ($1,$2,$3,$4,$5,$6::jsonb,clock_timestamp(),COALESCE((SELECT authorization_epoch FROM tasks WHERE id::text=$1),0),$7) RETURNING id`, taskID, key, target.URL, method, digest, raw, version).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
@@ -129,6 +133,10 @@ func (d *DB) BeginTargetRequest(ctx context.Context, taskID string, target Targe
 }
 
 func (d *DB) FinishTargetRequest(ctx context.Context, id int64, status, latencyMS int, requestErr string, retryAfterSeconds int, signals ...string) error {
+	return d.FinishTargetRequestOutcome(ctx, id, status, latencyMS, requestErr, "", retryAfterSeconds, signals...)
+}
+
+func (d *DB) FinishTargetRequestOutcome(ctx context.Context, id int64, status, latencyMS int, requestErr, errorKind string, retryAfterSeconds int, signals ...string) error {
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -144,7 +152,7 @@ func (d *DB) FinishTargetRequest(ctx context.Context, id int64, status, latencyM
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "target-budget:"+key); err != nil {
 		return err
 	}
-	err = tx.QueryRowContext(ctx, `UPDATE target_requests SET state='finished',status_code=$2,latency_ms=$3,error=$4,finished_at=now() WHERE id=$1 AND state='running' RETURNING target_key,budget`, id, status, latencyMS, requestErr).Scan(&key, &raw)
+	err = tx.QueryRowContext(ctx, `UPDATE target_requests SET state='finished',status_code=$2,latency_ms=$3,error=$4,error_kind=$5,finished_at=now() WHERE id=$1 AND state='running' RETURNING target_key,budget`, id, status, latencyMS, requestErr, errorKind).Scan(&key, &raw)
 	if err != nil {
 		return err
 	}
@@ -216,6 +224,7 @@ type TargetRequestRecord struct {
 	Status     int        `json:"status_code"`
 	LatencyMS  int        `json:"latency_ms"`
 	Error      string     `json:"error"`
+	ErrorKind  string     `json:"error_kind"`
 	StartedAt  time.Time  `json:"started_at"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }
@@ -227,7 +236,7 @@ func (d *DB) ListTargetRequests(ctx context.Context, id string, before int64, li
 	if limit > 500 {
 		limit = 500
 	}
-	rows, err := d.QueryContext(ctx, `SELECT id,task_id,target_key,url,method,state,status_code,latency_ms,error,started_at,finished_at FROM target_requests WHERE task_id=$1 AND ($2::bigint=0 OR id<$2) ORDER BY id DESC LIMIT $3`, id, before, limit)
+	rows, err := d.QueryContext(ctx, `SELECT id,task_id,target_key,url,method,state,status_code,latency_ms,error,error_kind,started_at,finished_at FROM target_requests WHERE task_id=$1 AND ($2::bigint=0 OR id<$2) ORDER BY id DESC LIMIT $3`, id, before, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +244,7 @@ func (d *DB) ListTargetRequests(ctx context.Context, id string, before int64, li
 	out := []TargetRequestRecord{}
 	for rows.Next() {
 		var r TargetRequestRecord
-		if err := rows.Scan(&r.ID, &r.TaskID, &r.TargetKey, &r.URL, &r.Method, &r.State, &r.Status, &r.LatencyMS, &r.Error, &r.StartedAt, &r.FinishedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.TaskID, &r.TargetKey, &r.URL, &r.Method, &r.State, &r.Status, &r.LatencyMS, &r.Error, &r.ErrorKind, &r.StartedAt, &r.FinishedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -244,8 +253,13 @@ func (d *DB) ListTargetRequests(ctx context.Context, id string, before int64, li
 }
 
 func (d *DB) RecordDeniedTargetRequest(ctx context.Context, taskID string, target Target, method, reason string) error {
-	_, e := d.ExecContext(ctx, `INSERT INTO target_requests(task_id,target_key,url,method,budget,state,status_code,error,finished_at) VALUES ($1,$2,$3,$4,'{}','denied',403,$5,now())`, taskID, target.ServiceKey(), target.URL, method, reason)
-	return e
+	version, err := d.AuthorizationVersion(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	_, err = d.ExecContext(ctx, `INSERT INTO target_requests(task_id,target_key,url,method,budget,state,status_code,error,error_kind,authorization_version,authorization_epoch,finished_at)
+ VALUES ($1,$2,$3,$4,'{}','denied',403,$5,'control',$6,COALESCE((SELECT authorization_epoch FROM tasks WHERE id::text=$1),0),clock_timestamp())`, taskID, target.ServiceKey(), target.URL, method, reason, version)
+	return err
 }
 func (d *DB) TargetHasAccountBudget(ctx context.Context, key string) (bool, error) {
 	var enabled bool
